@@ -35,4 +35,6 @@ Thumbs.db
 
 # Temporary
 *.png
-*.yml
+
+# AI agent config
+CLAUDE.md
