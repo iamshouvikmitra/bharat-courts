@@ -1,0 +1,56 @@
+[project]
+name = "bharat-courts"
+version = "0.1.0"
+description = "Async Python client for Indian court data — eCourts, HC Services, Supreme Court"
+license = "MIT"
+authors = [{name = "bharat-courts Contributors"}]
+requires-python = ">=3.11"
+readme = "README.md"
+keywords = ["india", "courts", "ecourts", "legal", "scraper"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "httpx>=0.28",
+    "pydantic-settings>=2.7",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+]
+
+[project.optional-dependencies]
+ocr = ["Pillow>=11.0", "ddddocr>=1.5.5,<1.6"]
+cli = ["click>=8.1", "rich>=13.0"]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "respx>=0.22",
+    "ruff>=0.8",
+]
+all = ["bharat-courts[ocr,cli,dev]"]
+
+[project.scripts]
+bharat-courts = "bharat_courts.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bharat_courts"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

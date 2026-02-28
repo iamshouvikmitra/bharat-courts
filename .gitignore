@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Environment
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Playwright
+.playwright/
+.playwright-cli/
+
+# Temporary
+*.png
+*.yml
