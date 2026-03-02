@@ -43,14 +43,45 @@ def _parse_judges(text: str) -> list[str]:
 
 
 def _extract_title_and_case(cell: Tag) -> tuple[str, str]:
-    """Extract title and case number from case details cell."""
-    strong = cell.find("strong")
+    """Extract title and case number from case details cell.
+
+    The title is in the first <strong> (not .caseDetailsTD).
+    """
+    strong = cell.find("strong", class_=lambda c: c != "caseDetailsTD")
     title = _clean_text(strong.get_text()) if strong else ""
 
-    # Case number is typically after the <br> tag
+    # Case number is typically after the <br> tag but before metadata
     full_text = _clean_text(cell.get_text())
+    # Remove metadata block text if present
+    metadata_block = cell.find("strong", class_="caseDetailsTD")
+    if metadata_block:
+        metadata_text = _clean_text(metadata_block.get_text())
+        full_text = full_text.replace(metadata_text, "")
     case_number = full_text.replace(title, "").strip()
     return title, case_number
+
+
+def _extract_case_metadata(cell: Tag) -> dict[str, str]:
+    """Extract metadata from <strong class="caseDetailsTD"> blocks.
+
+    The portal uses <span>Label</span><font>Value</font> pairs.
+    Returns a dict of label->value. Empty dict if no metadata block.
+    """
+    block = cell.find("strong", class_="caseDetailsTD")
+    if not block:
+        return {}
+
+    metadata: dict[str, str] = {}
+    spans = block.find_all("span")
+    for span in spans:
+        label = _clean_text(span.get_text())
+        if not label:
+            continue
+        # Value is in the next <font> sibling
+        font = span.find_next_sibling("font")
+        if font:
+            metadata[label] = _clean_text(font.get_text())
+    return metadata
 
 
 def _parse_total_count(soup: BeautifulSoup) -> int:
@@ -89,6 +120,7 @@ def parse_judgment_search(html: str, base_url: str = "", page: int = 1) -> Searc
             continue
 
         title, case_number = _extract_title_and_case(cols[2])
+        metadata = _extract_case_metadata(cols[2])
         court_name = _clean_text(cols[3].get_text())
         judges = _parse_judges(cols[4].get_text())
         judgment_date = _parse_date(cols[5].get_text())
@@ -111,6 +143,9 @@ def parse_judgment_search(html: str, base_url: str = "", page: int = 1) -> Searc
         elif len(judges) == 1:
             bench_type = "Single Bench"
 
+        # Promote CNR Number to source_id if present
+        source_id = metadata.pop("CNR Number", "")
+
         judgments.append(
             JudgmentResult(
                 title=title,
@@ -121,6 +156,8 @@ def parse_judgment_search(html: str, base_url: str = "", page: int = 1) -> Searc
                 pdf_url=pdf_url,
                 bench_type=bench_type,
                 source_url=pdf_url,
+                source_id=source_id,
+                metadata=metadata,
             )
         )
 
