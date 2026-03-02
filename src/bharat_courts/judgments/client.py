@@ -25,6 +25,25 @@ from bharat_courts.models import JudgmentResult, SearchResult
 
 logger = logging.getLogger(__name__)
 
+# Known bad PDF sizes from the judgment portal:
+# 0 bytes = empty response, 315 bytes = error page served as PDF
+_BAD_PDF_SIZES = frozenset({0, 315})
+_PDF_MAGIC = b"%PDF"
+
+
+def _validate_pdf_bytes(content: bytes) -> bytes | None:
+    """Validate that downloaded content is a real PDF.
+
+    Returns the content if valid, None otherwise.
+    """
+    if len(content) in _BAD_PDF_SIZES:
+        logger.warning("Invalid PDF: got %d bytes (known bad size)", len(content))
+        return None
+    if not content.startswith(_PDF_MAGIC):
+        logger.warning("Invalid PDF: missing %%PDF magic bytes (got %r)", content[:8])
+        return None
+    return content
+
 
 class JudgmentSearchClient:
     """Async client for Judgment Search portal (judgments.ecourts.gov.in).
@@ -155,11 +174,17 @@ class JudgmentSearchClient:
     async def download_pdf(self, judgment: JudgmentResult) -> JudgmentResult:
         """Download the PDF for a judgment result.
 
-        Modifies the judgment in-place, setting pdf_bytes.
+        Modifies the judgment in-place, setting pdf_bytes only if
+        the downloaded content is a valid PDF.
         """
         if not judgment.pdf_url:
             logger.warning("No PDF URL for judgment: %s", judgment.title)
             return judgment
 
-        judgment.pdf_bytes = await self._http.get_bytes(judgment.pdf_url)
+        content = await self._http.get_bytes(judgment.pdf_url)
+        validated = _validate_pdf_bytes(content)
+        if validated is None:
+            logger.warning("Skipping invalid PDF for: %s", judgment.title)
+        else:
+            judgment.pdf_bytes = validated
         return judgment
