@@ -74,10 +74,18 @@ class Court(_Serializable):
     state_code: str  # eCourts state code
     court_type: CourtType
     bench: str | None = None  # e.g. "Lucknow Bench" for Allahabad HC
+    judgment_code: str = ""  # judgments.ecourts.gov.in court code
 
     @property
     def slug(self) -> str:
         return self.code.lower().replace(" ", "-")
+
+    @property
+    def judgment_compound_code(self) -> str:
+        """Compound code for judgments portal: ``{judgment_code}~{state_code}``."""
+        if not self.judgment_code:
+            return ""
+        return f"{self.judgment_code}~{self.state_code}"
 
 
 @dataclass

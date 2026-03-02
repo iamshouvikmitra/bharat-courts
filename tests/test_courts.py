@@ -3,6 +3,7 @@
 from bharat_courts.courts import (
     SUPREME_COURT,
     get_court,
+    get_court_by_judgment_code,
     get_court_by_name,
     list_all_courts,
     list_high_courts,
@@ -59,3 +60,37 @@ def test_bench_courts():
     assert court is not None
     assert court.bench == "Nagpur"
     assert court.state_code == "1"  # Same as main Bombay HC
+
+
+def test_judgment_code():
+    delhi = get_court("delhi")
+    assert delhi is not None
+    assert delhi.judgment_code == "7"
+
+
+def test_judgment_compound_code():
+    delhi = get_court("delhi")
+    assert delhi is not None
+    assert delhi.judgment_compound_code == "7~26"
+
+    # Supreme Court has no judgment_code
+    assert SUPREME_COURT.judgment_compound_code == ""
+
+
+def test_get_court_by_judgment_code():
+    court = get_court_by_judgment_code("7")
+    assert court is not None
+    assert court.code == "delhi"
+
+    court = get_court_by_judgment_code("27")
+    assert court is not None
+    assert court.code == "bombay"  # Main court, not bench variant
+
+    assert get_court_by_judgment_code("999") is None
+
+
+def test_bench_shares_judgment_code():
+    bombay = get_court("bombay")
+    nagpur = get_court("bombay-nagpur")
+    assert bombay is not None and nagpur is not None
+    assert bombay.judgment_code == nagpur.judgment_code == "27"
