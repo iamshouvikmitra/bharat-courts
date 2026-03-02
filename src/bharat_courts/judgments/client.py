@@ -78,6 +78,21 @@ class JudgmentSearchClient:
         if self._owns_http:
             await self._http.__aexit__(*args)
 
+    def _update_token_from_response(self, data: dict) -> None:
+        """Extract and store the rotating app_token from an API response."""
+        token = data.get("app_token", "")
+        if token:
+            self._app_token = token
+
+    def _is_session_expired(self, data: dict) -> bool:
+        """Check if the session has expired and needs a full refresh."""
+        if data.get("session_expire") == "Y":
+            return True
+        msg = data.get("errormsg", "")
+        if msg and "session" in msg.lower():
+            return True
+        return False
+
     async def _init_session(self):
         """Load the main page to establish session cookies."""
         await self._http.get(endpoints.MAIN_PAGE_URL)
@@ -110,7 +125,7 @@ class JudgmentSearchClient:
             logger.error("CAPTCHA check returned non-JSON: %s", resp.text[:200])
             return False
 
-        self._app_token = data.get("app_token", "")
+        self._update_token_from_response(data)
 
         if data.get("captcha_status") == "Y":
             return True
