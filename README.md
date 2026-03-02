@@ -18,7 +18,8 @@ India's eCourts platform holds millions of case records across 25+ High Courts a
 - **Download orders & judgments** — get PDFs for all orders in a case with one call
 - **Monitor cause lists** — see which cases are listed before which bench, every day
 - **Search Supreme Court judgments** — by party name, year, or keyword
-- **Automate CAPTCHA handling** — built-in OCR solver, or plug in your own
+- **Bulk download judgments** — paginate through results, batch-download PDFs with automatic session management
+- **Automate CAPTCHA handling** — built-in OCR solver, ONNX solver, or plug in your own
 
 Works standalone as a Python library, as a CLI tool, or as an **AI agent skill** — install it into Claude Code, GitHub Copilot, or any MCP-compatible assistant and ask questions in plain English.
 
@@ -32,10 +33,13 @@ pip install bharat-courts
 # With automatic CAPTCHA solving (recommended)
 pip install bharat-courts[ocr]
 
+# With lightweight ONNX CAPTCHA solver (alternative to ddddocr)
+pip install bharat-courts[onnx]
+
 # With CLI
 pip install bharat-courts[cli]
 
-# Everything (OCR + CLI + dev tools)
+# Everything (OCR + ONNX + CLI + dev tools)
 pip install bharat-courts[all]
 ```
 
@@ -173,7 +177,7 @@ with open("matters.json", "w") as f:
 | Portal | Client | Status |
 |--------|--------|--------|
 | [HC Services](https://hcservices.ecourts.gov.in) | `HCServicesClient` | Fully working |
-| [Judgment Search](https://judgments.ecourts.gov.in) | `JudgmentSearchClient` | Basic search |
+| [Judgment Search](https://judgments.ecourts.gov.in) | `JudgmentSearchClient` | Search, pagination, bulk PDF download |
 | [Supreme Court](https://main.sci.gov.in) | `SCIClient` | Basic search |
 
 ## API Reference
@@ -387,18 +391,19 @@ async with JudgmentSearchClient(captcha_solver=solver) as client:
 
 ---
 
-#### `search(search_text, *, search_opt="PHRASE", court_type="2", max_captcha_attempts=3) -> SearchResult`
+#### `search(search_text, *, page=1, search_opt="PHRASE", court_type="2", max_captcha_attempts=3) -> SearchResult`
 
 Search for judgments by keyword. **CAPTCHA required.**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `search_text` | `str` | Yes | — | Search query text |
+| `page` | `int` | No | `1` | Page number (1-indexed) |
 | `search_opt` | `str` | No | `"PHRASE"` | `"PHRASE"`, `"ANY"`, or `"ALL"` |
 | `court_type` | `str` | No | `"2"` | `"2"` for High Courts, `"3"` for SCR |
 | `max_captcha_attempts` | `int` | No | `3` | Max CAPTCHA retry attempts |
 
-**Returns:** `SearchResult` — contains `items: list[JudgmentResult]`, `total_count`, pagination info.
+**Returns:** `SearchResult` — contains `items: list[JudgmentResult]`, `total_count`, pagination info. Each `JudgmentResult` includes parsed metadata (CNR number, disposal nature, registration date) and `source_id` (CNR) when available.
 
 ```python
 from bharat_courts import JudgmentSearchClient
@@ -410,26 +415,64 @@ async with JudgmentSearchClient(captcha_solver=OCRCaptchaSolver()) as client:
     for judgment in results.items:
         print(f"{judgment.title}")
         print(f"  Court: {judgment.court_name}, Date: {judgment.judgment_date}")
-        print(f"  Bench: {judgment.bench_type}, Judges: {', '.join(judgment.judges)}")
+        print(f"  CNR: {judgment.source_id}")
+        print(f"  Metadata: {judgment.metadata}")
+```
+
+---
+
+#### `search_all(search_text, *, search_opt="PHRASE", court_type="2", max_captcha_attempts=3) -> AsyncIterator[SearchResult]`
+
+Iterate through all pages of search results. Yields one `SearchResult` per page, automatically handling pagination, token rotation, and session expiry re-authentication.
+
+```python
+async with JudgmentSearchClient(captcha_solver=solver) as client:
+    async for page in client.search_all("land acquisition"):
+        for judgment in page.items:
+            print(f"{judgment.title} ({judgment.judgment_date})")
 ```
 
 ---
 
 #### `download_pdf(judgment) -> JudgmentResult`
 
-Download the PDF for a judgment result.
+Download the PDF for a judgment result. Validates the response — rejects empty (0-byte), error (315-byte), and non-PDF responses.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `judgment` | `JudgmentResult` | Yes | A result from `search()` |
 
-**Returns:** `JudgmentResult` — the same object with `pdf_bytes` populated.
+**Returns:** `JudgmentResult` — the same object with `pdf_bytes` populated (or `None` if the PDF was invalid).
 
 ```python
 judgment = results.items[0]
 judgment = await client.download_pdf(judgment)
-with open("judgment.pdf", "wb") as f:
-    f.write(judgment.pdf_bytes)
+if judgment.pdf_bytes:
+    with open("judgment.pdf", "wb") as f:
+        f.write(judgment.pdf_bytes)
+```
+
+---
+
+#### `download_pdfs(judgments, *, batch_size=25) -> list[JudgmentResult]`
+
+Bulk-download PDFs for multiple judgments. Resets the session every `batch_size` downloads to avoid per-download CAPTCHAs (the portal requires CAPTCHAs after 25 downloads per session). Skips judgments that already have `pdf_bytes`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `judgments` | `list[JudgmentResult]` | Yes | — | Judgments to download PDFs for |
+| `batch_size` | `int` | No | `25` | Downloads before session reset |
+
+**Returns:** `list[JudgmentResult]` — the same list with `pdf_bytes` populated where successful.
+
+```python
+async with JudgmentSearchClient(captcha_solver=solver) as client:
+    results = await client.search("constitution")
+    await client.download_pdfs(results.items)
+    for j in results.items:
+        if j.pdf_bytes:
+            with open(f"{j.case_number}.pdf", "wb") as f:
+                f.write(j.pdf_bytes)
 ```
 
 ---
@@ -508,6 +551,7 @@ Download the PDF for a Supreme Court judgment.
 
 ```python
 from bharat_courts import get_court, get_court_by_name, list_high_courts, list_all_courts
+from bharat_courts.courts import get_court_by_judgment_code
 ```
 
 #### `get_court(code) -> Court | None`
@@ -527,6 +571,15 @@ Look up a court by its full name. Case-insensitive exact match.
 
 ```python
 get_court_by_name("Delhi High Court")  # Court(name="Delhi High Court", ...)
+```
+
+#### `get_court_by_judgment_code(judgment_code) -> Court | None`
+
+Look up a court by its `judgments.ecourts.gov.in` code. Returns the main court (not bench variants).
+
+```python
+get_court_by_judgment_code("7")   # Delhi High Court
+get_court_by_judgment_code("27")  # Bombay High Court (main, not bench)
 ```
 
 #### `list_high_courts() -> list[Court]`
@@ -565,12 +618,15 @@ model.to_json(indent=None, exclude_none=False)  # -> JSON string
 class Court:
     name: str                   # "Delhi High Court"
     code: str                   # "delhi"
-    state_code: str             # "26"
+    state_code: str             # "26" (hcservices.ecourts.gov.in)
     court_type: CourtType       # CourtType.HIGH_COURT
     bench: str | None = None    # "Lucknow Bench" (for bench-specific entries)
+    judgment_code: str = ""     # "7" (judgments.ecourts.gov.in)
 
     @property
-    def slug(self) -> str       # code lowercased, spaces replaced with hyphens
+    def slug(self) -> str               # code lowercased, spaces replaced with hyphens
+    @property
+    def judgment_compound_code(self) -> str  # "{judgment_code}~{state_code}", e.g. "7~26"
 ```
 
 #### `CourtType`
@@ -721,6 +777,25 @@ solver = OCRCaptchaSolver(
 
 ~60% accuracy. Failed attempts are automatically retried with fresh sessions.
 
+#### `ONNXCaptchaSolver`
+
+Lightweight CAPTCHA solver using ONNX Runtime. Requires `pip install bharat-courts[onnx]`. Uses a pre-trained model from HuggingFace (captchabreaker), downloaded lazily to `~/.cache/bharat-courts/` on first use.
+
+```python
+from bharat_courts.captcha.onnx import ONNXCaptchaSolver
+
+solver = ONNXCaptchaSolver()
+
+# Or with a custom model file
+solver = ONNXCaptchaSolver(model_path="/path/to/custom_model.onnx")
+```
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model_path` | `str \| Path \| None` | No | `None` | Path to a custom ONNX model. If `None`, downloads the default captchabreaker model. |
+
+Validates that decoded text is exactly 6 characters — returns empty string on wrong length to trigger client retry.
+
 #### `ManualCaptchaSolver`
 
 Interactive solver that saves the CAPTCHA image and prompts the user.
@@ -797,36 +872,36 @@ Or use a `.env` file. See [.env.example](.env.example).
 
 ## Supported Courts
 
-All 25 High Courts with verified eCourts state codes:
+All 25 High Courts with verified eCourts state codes and judgment portal codes:
 
-| Court | Code | State Code |
-|-------|------|------------|
-| Allahabad HC | `allahabad` | 13 |
-| Andhra Pradesh HC | `andhra` | 2 |
-| Bombay HC | `bombay` | 1 |
-| Calcutta HC | `calcutta` | 16 |
-| Chhattisgarh HC | `chhattisgarh` | 18 |
-| Delhi HC | `delhi` | 26 |
-| Gauhati HC | `gauhati` | 6 |
-| Gujarat HC | `gujarat` | 17 |
-| Himachal Pradesh HC | `himachal` | 5 |
-| J&K HC | `jammu` | 12 |
-| Jharkhand HC | `jharkhand` | 7 |
-| Karnataka HC | `karnataka` | 3 |
-| Kerala HC | `kerala` | 4 |
-| Madhya Pradesh HC | `mp` | 23 |
-| Madras HC | `madras` | 10 |
-| Manipur HC | `manipur` | 25 |
-| Meghalaya HC | `meghalaya` | 21 |
-| Orissa HC | `orissa` | 11 |
-| Patna HC | `patna` | 8 |
-| Punjab & Haryana HC | `punjab` | 22 |
-| Rajasthan HC | `rajasthan` | 9 |
-| Sikkim HC | `sikkim` | 24 |
-| Telangana HC | `telangana` | 29 |
-| Tripura HC | `tripura` | 20 |
-| Uttarakhand HC | `uttarakhand` | 15 |
-| Supreme Court | `sci` | 0 |
+| Court | Code | State Code | Judgment Code |
+|-------|------|------------|---------------|
+| Allahabad HC | `allahabad` | 13 | 9 |
+| Andhra Pradesh HC | `andhra` | 2 | 28 |
+| Bombay HC | `bombay` | 1 | 27 |
+| Calcutta HC | `calcutta` | 16 | 19 |
+| Chhattisgarh HC | `chhattisgarh` | 18 | 22 |
+| Delhi HC | `delhi` | 26 | 7 |
+| Gauhati HC | `gauhati` | 6 | 18 |
+| Gujarat HC | `gujarat` | 17 | 24 |
+| Himachal Pradesh HC | `himachal` | 5 | 2 |
+| J&K HC | `jammu` | 12 | 1 |
+| Jharkhand HC | `jharkhand` | 7 | 20 |
+| Karnataka HC | `karnataka` | 3 | 29 |
+| Kerala HC | `kerala` | 4 | 32 |
+| Madhya Pradesh HC | `mp` | 23 | 23 |
+| Madras HC | `madras` | 10 | 33 |
+| Manipur HC | `manipur` | 25 | 14 |
+| Meghalaya HC | `meghalaya` | 21 | 17 |
+| Orissa HC | `orissa` | 11 | 21 |
+| Patna HC | `patna` | 8 | 10 |
+| Punjab & Haryana HC | `punjab` | 22 | 3 |
+| Rajasthan HC | `rajasthan` | 9 | 8 |
+| Sikkim HC | `sikkim` | 24 | 11 |
+| Telangana HC | `telangana` | 29 | 36 |
+| Tripura HC | `tripura` | 20 | 16 |
+| Uttarakhand HC | `uttarakhand` | 15 | 5 |
+| Supreme Court | `sci` | 0 | — |
 
 Bombay and Allahabad HCs also have bench-specific entries (e.g., `bombay-nagpur`, `allahabad-lucknow`).
 
@@ -855,7 +930,7 @@ source .venv/bin/activate   # Linux/macOS
 pip install -e ".[all]"
 
 # 4. Verify everything works
-pytest                                    # 43 unit tests, no network needed
+pytest                                    # 69 unit tests, no network needed
 ruff check . && ruff format --check .     # lint + format check
 ```
 
@@ -907,7 +982,8 @@ src/bharat_courts/
 ├── captcha/
 │   ├── base.py          # CaptchaSolver ABC
 │   ├── manual.py        # Stdin/callback solver
-│   └── ocr.py           # ddddocr-based solver
+│   ├── ocr.py           # ddddocr-based solver
+│   └── onnx.py          # ONNX Runtime solver (captchabreaker)
 ├── hcservices/          # HC Services portal (primary, fully working)
 │   ├── client.py        # HCServicesClient
 │   ├── endpoints.py     # URL + form builders
@@ -924,12 +1000,11 @@ src/bharat_courts/
 
 ### Areas where help is needed
 
-- **Better CAPTCHA solving** — the ddddocr OCR is ~60% accurate; a fine-tuned model or alternative approach would help
+- **Better CAPTCHA solving** — the ddddocr OCR is ~60% accurate; the ONNX solver is an alternative, but a fine-tuned model would help further
 - **District court support** — eCourts has district court portals with a different API
-- **Judgment Search portal** — the `JudgmentSearchClient` needs more thorough testing and pagination support
 - **Supreme Court client** — `SCIClient` is basic; the SCI website structure changes frequently
 - **More High Court coverage** — test the client against courts beyond Delhi/Bombay/Allahabad
-- **Documentation** — API docs, more examples, tutorials
+- **Documentation** — more examples, tutorials
 
 ### Submitting changes
 
