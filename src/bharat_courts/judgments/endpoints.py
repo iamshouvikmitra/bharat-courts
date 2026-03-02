@@ -52,6 +52,7 @@ def search_results_params(
     court_type: str = "2",
     app_token: str = "",
     escr_flag: str = "",
+    pagenum: int = 1,
 ) -> dict[str, str]:
     """Build query parameters for the search results page.
 
@@ -62,6 +63,7 @@ def search_results_params(
         court_type: "2" for High Courts, "3" for SCR (Supreme Court Reporter).
         app_token: Session token from checkCaptcha response.
         escr_flag: Set to "Y" for eSCR mode.
+        pagenum: Page number (1-indexed).
     """
     return {
         "p": "pdf_search/home",
@@ -73,4 +75,5 @@ def search_results_params(
         "proximity": "",
         "sel_lang": "",
         "app_token": app_token,
+        "pagenum": str(pagenum),
     }

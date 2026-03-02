@@ -13,6 +13,7 @@ Flow:
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 
 from bharat_courts.captcha.base import CaptchaSolver
 from bharat_courts.captcha.manual import ManualCaptchaSolver
@@ -133,10 +134,25 @@ class JudgmentSearchClient:
         logger.warning("CAPTCHA failed: %s", data.get("errormsg", "Unknown"))
         return False
 
+    async def _authenticate(self, search_text: str, *, max_captcha_attempts: int = 3) -> str | None:
+        """Establish session and solve CAPTCHA. Returns captcha text or None."""
+        await self._init_session()
+        for attempt in range(max_captcha_attempts):
+            captcha_text = await self._solve_captcha()
+            if not captcha_text:
+                logger.warning("Empty CAPTCHA response, attempt %d", attempt + 1)
+                continue
+            if await self._validate_captcha(captcha_text, search_text):
+                return captcha_text
+            logger.info("CAPTCHA attempt %d failed, retrying...", attempt + 1)
+        logger.error("Failed to solve CAPTCHA after %d attempts", max_captcha_attempts)
+        return None
+
     async def search(
         self,
         search_text: str,
         *,
+        page: int = 1,
         search_opt: str = "PHRASE",
         court_type: str = "2",
         max_captcha_attempts: int = 3,
@@ -148,6 +164,7 @@ class JudgmentSearchClient:
 
         Args:
             search_text: Keywords to search for.
+            page: Page number (1-indexed).
             search_opt: "PHRASE" (exact), "ANY" (any word), "ALL" (all words).
             court_type: "2" for High Courts, "3" for SCR.
             max_captcha_attempts: Max CAPTCHA solve retries before giving up.
@@ -155,36 +172,90 @@ class JudgmentSearchClient:
         Returns:
             SearchResult with list of JudgmentResult items.
         """
-        # Step 1: Establish session
-        await self._init_session()
-
-        # Step 2: CAPTCHA loop
-        for attempt in range(max_captcha_attempts):
-            captcha_text = await self._solve_captcha()
-            if not captcha_text:
-                logger.warning("Empty CAPTCHA response, attempt %d", attempt + 1)
-                continue
-
-            if await self._validate_captcha(captcha_text, search_text):
-                break
-            logger.info("CAPTCHA attempt %d failed, retrying...", attempt + 1)
-        else:
-            logger.error("Failed to solve CAPTCHA after %d attempts", max_captcha_attempts)
+        captcha_text = await self._authenticate(
+            search_text, max_captcha_attempts=max_captcha_attempts
+        )
+        if captcha_text is None:
             return SearchResult()
 
-        # Step 3: Load search results
         params = endpoints.search_results_params(
             search_text=search_text,
             captcha=captcha_text,
             search_opt=search_opt,
             court_type=court_type,
             app_token=self._app_token,
+            pagenum=page,
         )
         resp = await self._http.get(endpoints.SEARCH_RESULTS_URL, params=params)
         return parse_judgment_search(
             resp.text,
             base_url=endpoints.BASE_URL,
+            page=page,
         )
+
+    async def search_all(
+        self,
+        search_text: str,
+        *,
+        search_opt: str = "PHRASE",
+        court_type: str = "2",
+        max_captcha_attempts: int = 3,
+    ) -> AsyncIterator[SearchResult]:
+        """Iterate through all pages of search results.
+
+        Yields one SearchResult per page, automatically handling
+        pagination and token rotation between pages.
+        Re-authenticates on session expiry.
+
+        Args:
+            search_text: Keywords to search for.
+            search_opt: "PHRASE" (exact), "ANY" (any word), "ALL" (all words).
+            court_type: "2" for High Courts, "3" for SCR.
+            max_captcha_attempts: Max CAPTCHA solve retries before giving up.
+        """
+        captcha_text = await self._authenticate(
+            search_text, max_captcha_attempts=max_captcha_attempts
+        )
+        if captcha_text is None:
+            return
+
+        page = 1
+        while True:
+            params = endpoints.search_results_params(
+                search_text=search_text,
+                captcha=captcha_text,
+                search_opt=search_opt,
+                court_type=court_type,
+                app_token=self._app_token,
+                pagenum=page,
+            )
+            resp = await self._http.get(endpoints.SEARCH_RESULTS_URL, params=params)
+
+            # Check for JSON session expiry response
+            try:
+                data = resp.json()
+                self._update_token_from_response(data)
+                if self._is_session_expired(data):
+                    logger.info("Session expired at page %d, re-authenticating", page)
+                    captcha_text = await self._authenticate(
+                        search_text, max_captcha_attempts=max_captcha_attempts
+                    )
+                    if captcha_text is None:
+                        return
+                    continue
+            except Exception:
+                pass  # Not JSON — it's HTML results, continue parsing
+
+            result = parse_judgment_search(
+                resp.text,
+                base_url=endpoints.BASE_URL,
+                page=page,
+            )
+            yield result
+
+            if not result.has_next or not result.items:
+                break
+            page += 1
 
     async def download_pdf(self, judgment: JudgmentResult) -> JudgmentResult:
         """Download the PDF for a judgment result.
