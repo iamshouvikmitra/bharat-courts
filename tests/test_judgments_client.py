@@ -6,6 +6,7 @@ import respx
 from bharat_courts.captcha.base import CaptchaSolver
 from bharat_courts.judgments import endpoints
 from bharat_courts.judgments.client import JudgmentSearchClient, _validate_pdf_bytes
+from bharat_courts.models import JudgmentResult
 
 
 class _FixedCaptchaSolver(CaptchaSolver):
@@ -156,3 +157,82 @@ async def test_search_all_two_pages():
     assert pages[0].page == 1
     assert pages[1].items[0].title == "Page 2 Case"
     assert pages[1].page == 2
+
+
+def _make_judgments(n: int) -> list[JudgmentResult]:
+    """Create n JudgmentResult with unique PDF URLs."""
+    return [
+        JudgmentResult(
+            title=f"Case {i}",
+            court_name="Delhi HC",
+            pdf_url=f"https://example.com/pdf/{i}.pdf",
+        )
+        for i in range(n)
+    ]
+
+
+@respx.mock
+async def test_download_pdfs_batch_reset():
+    """Test that session resets after batch_size downloads."""
+    pdf_content = b"%PDF-1.4 valid pdf content" + b"\x00" * 500
+    init_call_count = 0
+
+    def route_get(request: httpx.Request) -> httpx.Response:
+        nonlocal init_call_count
+        url = str(request.url)
+        if "securimage" in url:
+            return httpx.Response(200, content=b"captcha-img")
+        if "example.com/pdf" in url:
+            return httpx.Response(200, content=pdf_content)
+        # Main page (init_session)
+        init_call_count += 1
+        return httpx.Response(200, text="<html></html>")
+
+    respx.get(url__regex=r".*").mock(side_effect=route_get)
+    respx.post(endpoints.CHECK_CAPTCHA_URL).mock(
+        return_value=httpx.Response(200, json={"captcha_status": "Y", "app_token": "tok"})
+    )
+
+    judgments = _make_judgments(30)
+    client = JudgmentSearchClient(captcha_solver=_FixedCaptchaSolver())
+    async with client:
+        result = await client.download_pdfs(judgments, batch_size=25)
+
+    # All 30 should have PDFs
+    downloaded = [j for j in result if j.pdf_bytes is not None]
+    assert len(downloaded) == 30
+
+    # Session should have been reset once at download #25
+    assert init_call_count == 1  # one reset at the batch boundary
+
+
+@respx.mock
+async def test_download_pdfs_skips_already_downloaded():
+    """Test that already-downloaded judgments are skipped."""
+    pdf_content = b"%PDF-1.4 valid" + b"\x00" * 500
+    download_count = 0
+
+    def route_get(request: httpx.Request) -> httpx.Response:
+        nonlocal download_count
+        url = str(request.url)
+        if "example.com/pdf" in url:
+            download_count += 1
+            return httpx.Response(200, content=pdf_content)
+        if "securimage" in url:
+            return httpx.Response(200, content=b"captcha-img")
+        return httpx.Response(200, text="<html></html>")
+
+    respx.get(url__regex=r".*").mock(side_effect=route_get)
+    respx.post(endpoints.CHECK_CAPTCHA_URL).mock(
+        return_value=httpx.Response(200, json={"captcha_status": "Y", "app_token": "tok"})
+    )
+
+    judgments = _make_judgments(3)
+    judgments[1].pdf_bytes = b"%PDF-already-downloaded" + b"\x00" * 500
+
+    client = JudgmentSearchClient(captcha_solver=_FixedCaptchaSolver())
+    async with client:
+        await client.download_pdfs(judgments)
+
+    # Only 2 downloads (index 0 and 2), index 1 was skipped
+    assert download_count == 2

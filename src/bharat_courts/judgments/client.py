@@ -70,6 +70,7 @@ class JudgmentSearchClient:
         self._http = http_client or RateLimitedClient(self._config)
         self._owns_http = http_client is None
         self._app_token: str = ""
+        self._download_count: int = 0
 
     async def __aenter__(self):
         await self._http.__aenter__()
@@ -273,4 +274,56 @@ class JudgmentSearchClient:
             logger.warning("Skipping invalid PDF for: %s", judgment.title)
         else:
             judgment.pdf_bytes = validated
+            self._download_count += 1
         return judgment
+
+    async def _reset_session_for_downloads(self) -> bool:
+        """Reset the session to avoid per-download CAPTCHAs.
+
+        After 25 PDF downloads, the portal starts requiring a CAPTCHA
+        per download. Resetting the session avoids this.
+
+        Returns True if reset succeeded, False otherwise.
+        """
+        self._download_count = 0
+        await self._init_session()
+        captcha_text = await self._solve_captcha()
+        if not captcha_text:
+            return False
+        return await self._validate_captcha(captcha_text, "")
+
+    async def download_pdfs(
+        self,
+        judgments: list[JudgmentResult],
+        *,
+        batch_size: int = 25,
+    ) -> list[JudgmentResult]:
+        """Download PDFs for multiple judgments in batches.
+
+        Resets the session every ``batch_size`` downloads to avoid
+        per-download CAPTCHAs. Skips judgments that already have pdf_bytes.
+
+        Args:
+            judgments: List of JudgmentResult to download PDFs for.
+            batch_size: Number of downloads before resetting session (default 25).
+
+        Returns:
+            The same list of judgments, with pdf_bytes populated where successful.
+        """
+        pending = [j for j in judgments if j.pdf_url and j.pdf_bytes is None]
+        if not pending:
+            return judgments
+
+        for i, judgment in enumerate(pending):
+            # Reset session at batch boundaries
+            if self._download_count > 0 and self._download_count % batch_size == 0:
+                logger.info("Reached %d downloads, resetting session", self._download_count)
+                if not await self._reset_session_for_downloads():
+                    logger.error("Session reset failed, stopping downloads")
+                    break
+
+            await self.download_pdf(judgment)
+            if judgment.pdf_bytes:
+                logger.debug("Downloaded %d/%d: %s", i + 1, len(pending), judgment.title)
+
+        return judgments
