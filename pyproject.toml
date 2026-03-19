@@ -1,6 +1,6 @@
 [project]
 name = "bharat-courts"
-version = "0.1.2"
+version = "0.2.0"
 description = "Async Python client for Indian court data — eCourts, HC Services, Supreme Court"
 license = "MIT"
 authors = [{name = "bharat-courts Contributors"}]
