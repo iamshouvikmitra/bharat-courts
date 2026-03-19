@@ -10,14 +10,15 @@
 
 ## What is this?
 
-India's eCourts platform holds millions of case records across 25+ High Courts and the Supreme Court — but there's no official API. Checking case status means navigating clunky portals, solving CAPTCHAs by hand, and copy-pasting results one at a time.
+India's eCourts platform holds millions of case records across 25+ High Courts, 700+ District Courts, and the Supreme Court — but there's no official API. Checking case status means navigating clunky portals, solving CAPTCHAs by hand, and copy-pasting results one at a time.
 
 **bharat-courts** fixes that. It gives you — and your AI assistant — direct programmatic access to:
 
-- **Track matters** — search by case number, party name, or advocate across any High Court
+- **Track matters** — search by case number, party name, or advocate across any High Court or District Court
 - **Download orders & judgments** — get PDFs for all orders in a case with one call
 - **Monitor cause lists** — see which cases are listed before which bench, every day
 - **Search Supreme Court judgments** — by party name, year, or keyword
+- **Access District Courts** — dynamically discover courts across 36 states/UTs and search 700+ court complexes
 - **Bulk download judgments** — paginate through results, batch-download PDFs with automatic session management
 - **Automate CAPTCHA handling** — built-in OCR solver, ONNX solver, or plug in your own
 
@@ -113,6 +114,32 @@ for pdf in pdfs:
     print(f"  Download: {pdf.pdf_url}")
 ```
 
+### Search District Court cases
+
+```python
+from bharat_courts import DistrictCourtClient
+from bharat_courts.districtcourts.parser import parse_complex_value
+
+async with DistrictCourtClient(captcha_solver=solver) as client:
+    # Discover the court hierarchy
+    districts = await client.list_districts("8")        # Bihar
+    complexes = await client.list_complexes("8", "1")   # Patna district
+
+    # Parse complex value to get code + establishment info
+    complex_val = list(complexes.keys())[-1]            # e.g. "1080010@2,3,4@Y"
+    code, ests, needs_est = parse_complex_value(complex_val)
+    est = ests[0] if needs_est else ""
+
+    # Search by party name
+    cases = await client.case_status_by_party(
+        state_code="8", dist_code="1",
+        court_complex_code=code, est_code=est,
+        party_name="kumar", year="2024",
+    )
+    for case in cases:
+        print(f"{case.case_number}: {case.petitioner} v {case.respondent}")
+```
+
 ### Search Supreme Court judgments
 
 ```python
@@ -140,6 +167,8 @@ Then just ask your AI agent:
 > "Download the latest order in WP(C) 4520/2023 before the Bombay High Court"
 
 > "What's on the cause list for Karnataka High Court tomorrow?"
+
+> "Search for cases filed by State of Bihar in Patna district court in 2024"
 
 > "Search Supreme Court judgments on right to privacy from last year"
 
@@ -177,6 +206,7 @@ with open("matters.json", "w") as f:
 | Portal | Client | Status |
 |--------|--------|--------|
 | [HC Services](https://hcservices.ecourts.gov.in) | `HCServicesClient` | Fully working |
+| [District Courts](https://services.ecourts.gov.in) | `DistrictCourtClient` | Case status, orders, cause lists across 700+ courts |
 | [Judgment Search](https://judgments.ecourts.gov.in) | `JudgmentSearchClient` | Search, pagination, bulk PDF download |
 | [Supreme Court](https://main.sci.gov.in) | `SCIClient` | Basic search |
 
@@ -374,6 +404,145 @@ Download an order or judgment PDF. **No CAPTCHA required.**
 pdf_bytes = await client.download_order_pdf(order.pdf_url)
 with open("order.pdf", "wb") as f:
     f.write(pdf_bytes)
+```
+
+---
+
+### `DistrictCourtClient`
+
+Client for District Courts across India via `services.ecourts.gov.in`. Covers 700+ court complexes across 36 states/UTs.
+
+Unlike High Courts (which use static `get_court()` codes), district courts require dynamic discovery of the 4-level hierarchy: **State → District → Court Complex → Establishment**.
+
+```python
+from bharat_courts import DistrictCourtClient
+
+client = DistrictCourtClient(
+    config=None,            # BharatCourtsConfig | None
+    captcha_solver=None,    # CaptchaSolver | None — defaults to ManualCaptchaSolver()
+    http_client=None,       # RateLimitedClient | None
+)
+```
+
+Use as an async context manager:
+
+```python
+async with DistrictCourtClient(captcha_solver=solver) as client:
+    ...
+```
+
+---
+
+#### Court Discovery Methods (No CAPTCHA)
+
+These methods discover the court hierarchy dynamically.
+
+##### `list_states() -> dict[str, str]`
+
+Returns all 36 states/UTs with their codes. Static data, no network call.
+
+```python
+states = await client.list_states()
+# {"8": "Bihar", "7": "Delhi", "27": "Maharashtra", ...}
+```
+
+##### `list_districts(state_code) -> dict[str, str]`
+
+Get districts for a state.
+
+```python
+districts = await client.list_districts("8")  # Bihar
+# {"1": "Patna", "35": "Gaya", "38": "Muzaffarpur", ...}
+```
+
+##### `list_complexes(state_code, dist_code) -> dict[str, str]`
+
+Get court complexes for a district. Values are in `code@ests@flag` format.
+
+```python
+complexes = await client.list_complexes("8", "1")  # Bihar, Patna
+# {"1080010@2,3,4@Y": "Civil Court, Patna Sadar", ...}
+
+# Parse the value to extract the code and check if establishment selection is needed
+from bharat_courts.districtcourts.parser import parse_complex_value
+code, est_codes, needs_est = parse_complex_value("1080010@2,3,4@Y")
+# code="1080010", est_codes=["2","3","4"], needs_est=True
+```
+
+##### `list_establishments(state_code, dist_code, court_complex_code) -> dict[str, str]`
+
+Get establishments for a court complex. Only needed when `needs_est` is `True`.
+
+```python
+establishments = await client.list_establishments("8", "1", "1080010")
+# {"2": "DJ Div. Patna Sadar", "3": "CJM Div. Patna Sadar", ...}
+```
+
+##### `list_case_types(state_code, dist_code, court_complex_code, est_code) -> dict[str, str]`
+
+Get available case types for a court.
+
+```python
+case_types = await client.list_case_types("8", "1", "1080010", "2")
+# {"89^2": "ADMINISTRATIVE SUITE", "152^2": "Anticipatory Bail - ABP", ...}
+```
+
+---
+
+#### Search Methods (CAPTCHA Required)
+
+All search methods take the 4-level court identifiers as keyword arguments.
+
+##### `case_status(*, state_code, dist_code, court_complex_code, est_code, case_type, case_number, year) -> list[CaseInfo]`
+
+Search by case number.
+
+```python
+cases = await client.case_status(
+    state_code="8", dist_code="1",
+    court_complex_code="1080010", est_code="2",
+    case_type="1", case_number="100", year="2024",
+)
+```
+
+##### `case_status_by_party(*, state_code, dist_code, court_complex_code, est_code, party_name, year, status_filter="Both") -> list[CaseInfo]`
+
+Search by party name (min 3 characters). `year` is mandatory.
+
+```python
+cases = await client.case_status_by_party(
+    state_code="8", dist_code="1",
+    court_complex_code="1080010", est_code="2",
+    party_name="kumar", year="2024",
+    status_filter="Pending",   # "Pending", "Disposed", or "Both"
+)
+```
+
+##### `court_orders(*, state_code, dist_code, court_complex_code, est_code, case_type, case_number, year) -> list[CaseOrder]`
+
+Get court orders for a case.
+
+```python
+orders = await client.court_orders(
+    state_code="8", dist_code="1",
+    court_complex_code="1080010", est_code="2",
+    case_type="1", case_number="100", year="2024",
+)
+```
+
+##### `cause_list(*, state_code, dist_code, court_complex_code, est_code, court_no="", causelist_date="", civil=True) -> list[CauseListEntry]`
+
+Get cause list entries.
+
+```python
+entries = await client.cause_list(
+    state_code="8", dist_code="1",
+    court_complex_code="1080010", est_code="2",
+    civil=True,
+    causelist_date="20-03-2026",  # DD-MM-YYYY, defaults to today
+)
+for e in entries:
+    print(f"#{e.serial_number} {e.case_number} — {e.petitioner} v {e.respondent}")
 ```
 
 ---
@@ -930,7 +1099,7 @@ source .venv/bin/activate   # Linux/macOS
 pip install -e ".[all]"
 
 # 4. Verify everything works
-pytest                                    # 69 unit tests, no network needed
+pytest                                    # 96 unit tests, no network needed
 ruff check . && ruff format --check .     # lint + format check
 ```
 
@@ -988,6 +1157,10 @@ src/bharat_courts/
 │   ├── client.py        # HCServicesClient
 │   ├── endpoints.py     # URL + form builders
 │   └── parser.py        # JSON + HTML response parsers
+├── districtcourts/      # District Courts portal (700+ courts)
+│   ├── client.py        # DistrictCourtClient
+│   ├── endpoints.py     # URL + form builders + state codes
+│   └── parser.py        # HTML response parsers
 ├── judgments/            # Judgment Search portal (basic)
 │   ├── client.py
 │   ├── endpoints.py
@@ -1001,7 +1174,7 @@ src/bharat_courts/
 ### Areas where help is needed
 
 - **Better CAPTCHA solving** — the ddddocr OCR is ~60% accurate; the ONNX solver is an alternative, but a fine-tuned model would help further
-- **District court support** — eCourts has district court portals with a different API
+- **District court enhancements** — more search types (filing number, FIR number, advocate, act), CLI commands
 - **Supreme Court client** — `SCIClient` is basic; the SCI website structure changes frequently
 - **More High Court coverage** — test the client against courts beyond Delhi/Bombay/Allahabad
 - **Documentation** — more examples, tutorials
@@ -1016,6 +1189,8 @@ src/bharat_courts/
 
 ## How it works
 
+### HC Services Portal
+
 The eCourts HC Services portal (`hcservices.ecourts.gov.in`) uses a PHP backend with:
 
 1. **Session cookies** — `GET main.php` establishes `HCSERVICES_SESSID`
@@ -1023,7 +1198,17 @@ The eCourts HC Services portal (`hcservices.ecourts.gov.in`) uses a PHP backend 
 3. **AJAX POST requests** — `cases_qry/index_qry.php` with `action_code` parameter
 4. **JSON responses** — `{"con": ["[{...}]"], "totRecords": N, "Error": ""}`
 
-This library handles all of this transparently — session management, CAPTCHA solving with retry, request/response parsing, and rate limiting.
+### District Courts Portal
+
+The District Courts portal (`services.ecourts.gov.in/ecourtindia_v6/`) uses a similar PHP backend with key differences:
+
+1. **Session cookies** — `SERVICES_SESSID` (established on page load)
+2. **Rotating `app_token`** — every AJAX response returns a new token that must be sent with the next request
+3. **MVC-style AJAX** — `/?p=controller/action` URL pattern (e.g., `/?p=casestatus/submitCaseNo`)
+4. **HTML responses** — search results are pre-rendered HTML tables (not JSON)
+5. **4-level court hierarchy** — State → District → Court Complex → Establishment (discovered dynamically)
+
+Both portals are handled transparently — session management, token rotation, CAPTCHA solving with retry, request/response parsing, and rate limiting.
 
 ## License
 
