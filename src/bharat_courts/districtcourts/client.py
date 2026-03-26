@@ -22,8 +22,8 @@ from __future__ import annotations
 import logging
 import random
 
+from bharat_courts.captcha import default_solver
 from bharat_courts.captcha.base import CaptchaSolver
-from bharat_courts.captcha.manual import ManualCaptchaSolver
 from bharat_courts.config import BharatCourtsConfig
 from bharat_courts.config import config as default_config
 from bharat_courts.districtcourts import endpoints
@@ -63,7 +63,7 @@ class DistrictCourtClient:
         http_client: RateLimitedClient | None = None,
     ):
         self._config = config or default_config
-        self._captcha_solver = captcha_solver or ManualCaptchaSolver()
+        self._captcha_solver = captcha_solver or default_solver()
         self._http = http_client or RateLimitedClient(self._config)
         self._owns_http = http_client is None
         self._app_token: str = ""

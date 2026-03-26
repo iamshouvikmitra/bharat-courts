@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import logging
 
+from bharat_courts.captcha import default_solver
 from bharat_courts.captcha.base import CaptchaSolver
-from bharat_courts.captcha.manual import ManualCaptchaSolver
 from bharat_courts.config import BharatCourtsConfig
 from bharat_courts.config import config as default_config
 from bharat_courts.hcservices import endpoints
@@ -54,7 +54,7 @@ class HCServicesClient:
         http_client: RateLimitedClient | None = None,
     ):
         self._config = config or default_config
-        self._captcha_solver = captcha_solver or ManualCaptchaSolver()
+        self._captcha_solver = captcha_solver or default_solver()
         self._http = http_client or RateLimitedClient(self._config)
         self._owns_http = http_client is None
 
@@ -215,6 +215,9 @@ class HCServicesClient:
     ) -> list[CaseOrder]:
         """Get court orders for a case.
 
+        Uses a case number search to get the encrypted order URL path,
+        then constructs the PDF download URL from display_pdf.php.
+
         Args:
             court: Court object.
             case_type: Numeric case type code (e.g. "134").
@@ -223,11 +226,11 @@ class HCServicesClient:
             bench_code: Bench code from :meth:`list_benches` (default "1").
 
         Returns:
-            List of CaseOrder objects.
+            List of CaseOrder objects with PDF URLs.
         """
 
         def build_form(captcha: str) -> dict:
-            return endpoints.court_orders_form(
+            return endpoints.case_status_form(
                 state_code=court.state_code,
                 court_code=bench_code,
                 case_type=case_type,
@@ -237,7 +240,12 @@ class HCServicesClient:
             )
 
         resp = await self._post_with_captcha_retry(endpoints.SHOW_RECORDS_URL, build_form)
-        return parse_orders(resp.text, base_url=endpoints.BASE_URL)
+        return parse_orders(
+            resp.text,
+            base_url=endpoints.BASE_URL,
+            bench_code=bench_code,
+            state_code=court.state_code,
+        )
 
     async def cause_list(
         self,
@@ -335,10 +343,20 @@ class HCServicesClient:
     async def download_order_pdf(self, pdf_url: str) -> bytes:
         """Download an order/judgment PDF.
 
+        The display_pdf.php endpoint requires a valid Referer header
+        and session cookies from the same client that performed the search.
+
         Args:
             pdf_url: URL from CaseOrder.pdf_url.
 
         Returns:
             Raw PDF bytes.
         """
-        return await self._http.get_bytes(pdf_url)
+        resp = await self._http.get(
+            pdf_url,
+            headers={
+                "Referer": endpoints.MAIN_PAGE_URL,
+                "Accept": "application/pdf,*/*",
+            },
+        )
+        return resp.content

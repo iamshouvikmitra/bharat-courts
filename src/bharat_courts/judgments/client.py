@@ -15,8 +15,8 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 
+from bharat_courts.captcha import default_solver
 from bharat_courts.captcha.base import CaptchaSolver
-from bharat_courts.captcha.manual import ManualCaptchaSolver
 from bharat_courts.config import BharatCourtsConfig
 from bharat_courts.config import config as default_config
 from bharat_courts.http import RateLimitedClient
@@ -51,8 +51,6 @@ class JudgmentSearchClient:
 
     Usage::
 
-        from bharat_courts.captcha.manual import ManualCaptchaSolver
-
         async with JudgmentSearchClient() as client:
             results = await client.search("constitution")
             for judgment in results.items:
@@ -66,7 +64,7 @@ class JudgmentSearchClient:
         http_client: RateLimitedClient | None = None,
     ):
         self._config = config or default_config
-        self._captcha_solver = captcha_solver or ManualCaptchaSolver()
+        self._captcha_solver = captcha_solver or default_solver()
         self._http = http_client or RateLimitedClient(self._config)
         self._owns_http = http_client is None
         self._app_token: str = ""
@@ -136,16 +134,22 @@ class JudgmentSearchClient:
         return False
 
     async def _authenticate(self, search_text: str, *, max_captcha_attempts: int = 3) -> str | None:
-        """Establish session and solve CAPTCHA. Returns captcha text or None."""
-        await self._init_session()
+        """Establish session and solve CAPTCHA. Returns captcha text or None.
+
+        Each attempt creates a fresh session so the Securimage backend
+        generates a new CAPTCHA challenge (within a single session the
+        challenge is pinned and retries are useless).
+        """
         for attempt in range(max_captcha_attempts):
+            if attempt > 0:
+                logger.info("CAPTCHA retry %d/%d — new session", attempt + 1, max_captcha_attempts)
+            await self._init_session()
             captcha_text = await self._solve_captcha()
             if not captcha_text:
                 logger.warning("Empty CAPTCHA response, attempt %d", attempt + 1)
                 continue
             if await self._validate_captcha(captcha_text, search_text):
                 return captcha_text
-            logger.info("CAPTCHA attempt %d failed, retrying...", attempt + 1)
         logger.error("Failed to solve CAPTCHA after %d attempts", max_captcha_attempts)
         return None
 
@@ -286,11 +290,7 @@ class JudgmentSearchClient:
         Returns True if reset succeeded, False otherwise.
         """
         self._download_count = 0
-        await self._init_session()
-        captcha_text = await self._solve_captcha()
-        if not captcha_text:
-            return False
-        return await self._validate_captcha(captcha_text, "")
+        return await self._authenticate("") is not None
 
     async def download_pdfs(
         self,

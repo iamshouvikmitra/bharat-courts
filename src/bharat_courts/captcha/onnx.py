@@ -92,8 +92,15 @@ class ONNXCaptchaSolver(CaptchaSolver):
         self._model_path = Path(model_path) if model_path else None
         self._session: ort.InferenceSession | None = None
 
+        # Fail fast: download model now so auth errors surface immediately
+        self._ensure_model()
+
     def _ensure_model(self) -> Path:
-        """Ensure the ONNX model is available, downloading if needed."""
+        """Ensure the ONNX model is available, downloading if needed.
+
+        Supports HuggingFace authentication via the ``HF_TOKEN`` environment
+        variable (required when the model repo is gated or private).
+        """
         if self._model_path and self._model_path.exists():
             return self._model_path
 
@@ -105,9 +112,39 @@ class ONNXCaptchaSolver(CaptchaSolver):
             return model_file
 
         logger.info("Downloading CAPTCHA ONNX model to %s", model_file)
+        import os
         import urllib.request
 
-        urllib.request.urlretrieve(_DEFAULT_MODEL_REPO, model_file)
+        req = urllib.request.Request(_DEFAULT_MODEL_REPO)
+        hf_token = os.environ.get("HF_TOKEN", "")
+        if hf_token:
+            req.add_header("Authorization", f"Bearer {hf_token}")
+
+        try:
+            with urllib.request.urlopen(req) as resp, open(model_file, "wb") as f:
+                f.write(resp.read())
+        except urllib.error.HTTPError as e:
+            model_file.unlink(missing_ok=True)
+            if e.code == 401:
+                raise RuntimeError(
+                    "HuggingFace requires authentication to download the CAPTCHA model. "
+                    "Get a token at https://huggingface.co/settings/tokens then:\n"
+                    "  export HF_TOKEN=hf_...\n"
+                    "Or use OCRCaptchaSolver (ddddocr) instead, which needs no token:\n"
+                    "  pip install bharat-courts[ocr]"
+                ) from e
+            raise RuntimeError(
+                f"Failed to download ONNX model from HuggingFace (HTTP {e.code}). "
+                f"URL: {_DEFAULT_MODEL_REPO}"
+            ) from e
+        except Exception as e:
+            model_file.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"Failed to download ONNX CAPTCHA model: {e}\n"
+                "You can also use OCRCaptchaSolver (ddddocr) instead:\n"
+                "  pip install bharat-courts[ocr]"
+            ) from e
+
         logger.info("Model downloaded successfully")
         return model_file
 

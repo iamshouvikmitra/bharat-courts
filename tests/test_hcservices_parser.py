@@ -86,6 +86,63 @@ def test_parse_orders(hcservices_orders_html):
     assert order2.order_type == "Interim Order"
 
 
+def test_parse_orders_json():
+    """Test parse_orders with JSON response containing orderurlpath."""
+    import json
+
+    records = [
+        {
+            "cino": "DLHC010582482024",
+            "type_name": "WP(C)",
+            "case_no2": "3",
+            "case_year": "2024",
+            "orderurlpath": "enc_path_abc123",
+        },
+        {
+            "cino": "DLHC010400092024",
+            "type_name": "CRL.A.",
+            "case_no2": "567",
+            "case_year": "2023",
+            "orderurlpath": "enc_path_def456",
+        },
+    ]
+    raw = json.dumps({
+        "con": [json.dumps(records)],
+        "totRecords": "2",
+        "Error": "",
+    })
+
+    results = parse_orders(
+        raw,
+        base_url="https://hcservices.ecourts.gov.in/hcservices",
+        bench_code="1",
+        state_code="26",
+    )
+    assert len(results) == 2
+
+    order1 = results[0]
+    assert "display_pdf.php" in order1.pdf_url
+    assert "filename=enc_path_abc123" in order1.pdf_url
+    assert "cino=DLHC010582482024" in order1.pdf_url
+    assert "cCode=1" in order1.pdf_url
+    assert "state_code=26" in order1.pdf_url
+    assert "caseno=WP(C)/3/2024" in order1.pdf_url
+
+    order2 = results[1]
+    assert "enc_path_def456" in order2.pdf_url
+    assert "CRL.A./567/2023" in order2.pdf_url
+
+
+def test_parse_orders_json_no_orderurlpath():
+    """Records without orderurlpath are skipped."""
+    import json
+
+    records = [{"cino": "DLHC01", "case_no2": "1", "case_year": "2024"}]
+    raw = json.dumps({"con": [json.dumps(records)], "totRecords": "1", "Error": ""})
+    results = parse_orders(raw)
+    assert results == []
+
+
 def test_parse_orders_empty():
     assert parse_orders("<html></html>") == []
 

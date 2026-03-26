@@ -219,8 +219,77 @@ def _parse_case_status_html(html: str) -> list[CaseInfo]:
 # ---------------------------------------------------------------------------
 
 
-def parse_orders(html: str, base_url: str = "") -> list[CaseOrder]:
-    """Parse orders table response."""
+def parse_orders(
+    raw: str,
+    base_url: str = "",
+    bench_code: str = "",
+    state_code: str = "",
+) -> list[CaseOrder]:
+    """Parse orders from a showRecords JSON response or HTML table.
+
+    The JSON response contains ``orderurlpath`` per case which is an encrypted
+    path used to construct ``display_pdf.php`` URLs.  Falls back to HTML table
+    parsing for legacy responses.
+    """
+    # Try JSON first (preferred — from case_status search)
+    stripped = raw.strip().lstrip("\ufeff")
+    if not stripped.startswith("<"):
+        try:
+            records, _ = _parse_json_envelope(stripped)
+            return _orders_from_json(records, base_url, bench_code, state_code)
+        except Exception:
+            pass  # Fall through to HTML parsing
+
+    # HTML table fallback
+    return _parse_orders_html(raw, base_url)
+
+
+def _orders_from_json(
+    records: list[dict],
+    base_url: str,
+    bench_code: str,
+    state_code: str,
+) -> list[CaseOrder]:
+    """Build CaseOrder list from showRecords JSON records."""
+    results = []
+    for rec in records:
+        orderurlpath = rec.get("orderurlpath", "")
+        if not orderurlpath:
+            continue
+
+        cino = rec.get("cino", "")
+        type_name = rec.get("type_name", "")
+        case_no2 = str(rec.get("case_no2", ""))
+        case_year = str(rec.get("case_year", ""))
+        caseno = f"{type_name}/{case_no2}/{case_year}" if type_name else ""
+
+        # orderurlpath is already URL-encoded from the server — use as-is
+        pdf_url = (
+            f"{base_url}/cases/display_pdf.php"
+            f"?filename={orderurlpath}"
+            f"&caseno={caseno}"
+            f"&cCode={bench_code}"
+            f"&appFlag=web"
+            f"&normal_v=1"
+            f"&cino={cino}"
+            f"&state_code={state_code}"
+            f"&flag=nojudgement"
+        )
+
+        results.append(
+            CaseOrder(
+                order_date=_parse_date("") or date.today(),
+                order_type="Order",
+                judge="",
+                pdf_url=pdf_url,
+            )
+        )
+
+    return results
+
+
+def _parse_orders_html(html: str, base_url: str = "") -> list[CaseOrder]:
+    """Parse orders from an HTML table (legacy format)."""
     soup = BeautifulSoup(html, "lxml")
     table = soup.find("table", id="orderTable") or soup.find("table")
     if not table:

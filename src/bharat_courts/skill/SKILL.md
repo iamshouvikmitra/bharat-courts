@@ -10,7 +10,9 @@ Async Python SDK for accessing Indian court data from eCourts portals.
 ## Installation
 
 ```bash
-pip install bharat-courts[ocr]   # with automatic CAPTCHA solving
+pip install bharat-courts[ocr]   # RECOMMENDED — ddddocr CAPTCHA solving, no auth needed
+pip install bharat-courts[onnx]  # ONNX model — requires HF_TOKEN env var for HuggingFace auth
+pip install bharat-courts[all]   # everything
 ```
 
 ## Quick Start — High Courts
@@ -25,7 +27,7 @@ async def main():
     solver = OCRCaptchaSolver()
 
     async with HCServicesClient(captcha_solver=solver) as client:
-        # Search by party name
+        # Search by party name (year is mandatory)
         cases = await client.case_status_by_party(court, party_name="state", year="2024")
 
         # Search by case number
@@ -103,6 +105,38 @@ async def main():
 asyncio.run(main())
 ```
 
+## Judgment Search Portal
+
+Search High Court judgments by keyword on judgments.ecourts.gov.in.
+
+```python
+from bharat_courts import JudgmentSearchClient
+from bharat_courts.captcha.ocr import OCRCaptchaSolver
+
+async def main():
+    solver = OCRCaptchaSolver()
+
+    async with JudgmentSearchClient(captcha_solver=solver) as client:
+        # Single page search
+        result = await client.search("right to privacy", search_opt="ALL", court_type="2")
+        for j in result.items:
+            print(f"{j.title} — {j.judgment_date}")
+
+        # Paginate through all results
+        async for page in client.search_all("right to privacy", search_opt="ALL"):
+            for j in page.items:
+                print(j.title)
+
+        # Download PDFs
+        result = await client.search("constitution")
+        result.items = [await client.download_pdf(j) for j in result.items]
+
+        # Batch download with automatic session reset every 25 downloads
+        judgments = await client.download_pdfs(result.items, batch_size=25)
+
+asyncio.run(main())
+```
+
 ## Available High Courts
 
 Use `get_court(code)` with any of these codes:
@@ -141,12 +175,24 @@ Use `get_court(code)` with any of these codes:
 | Method | CAPTCHA | Returns | Description |
 |--------|---------|---------|-------------|
 | `list_benches(court)` | No | `dict[str, str]` | Available benches |
-| `list_case_types(court)` | No | `dict[str, str]` | Case type codes |
-| `case_status(court, case_type, case_number, year)` | Yes | `list[CaseInfo]` | Search by case number |
-| `case_status_by_party(court, party_name, year)` | Yes | `list[CaseInfo]` | Search by party name |
-| `court_orders(court, case_type, case_number, year)` | Yes | `list[CaseOrder]` | Get orders for a case |
-| `cause_list(court, civil=True)` | Yes | `list[CauseListPDF]` | Today's cause list PDFs |
+| `list_case_types(court, *, bench_code="1")` | No | `dict[str, str]` | Case type codes for a bench |
+| `case_status(court, *, case_type, case_number, year, bench_code="1")` | Yes | `list[CaseInfo]` | Search by case number |
+| `case_status_by_party(court, *, party_name, year, bench_code="1", status_filter="Both")` | Yes | `list[CaseInfo]` | Search by party name |
+| `court_orders(court, *, case_type, case_number, year, bench_code="1")` | Yes | `list[CaseOrder]` | Get orders for a case |
+| `cause_list(court, *, civil=True, bench_code="1", causelist_date="")` | Yes | `list[CauseListPDF]` | Cause list PDFs (date format: DD-MM-YYYY) |
 | `download_order_pdf(pdf_url)` | No | `bytes` | Download order PDF |
+
+## JudgmentSearchClient Methods
+
+| Method | CAPTCHA | Returns | Description |
+|--------|---------|---------|-------------|
+| `search(search_text, *, page=1, search_opt="PHRASE", court_type="2", max_captcha_attempts=3)` | Yes | `SearchResult` | Search judgments by keyword |
+| `search_all(search_text, *, search_opt="PHRASE", court_type="2", max_captcha_attempts=3)` | Yes | `AsyncIterator[SearchResult]` | Paginate all results (auto re-auth on session expiry) |
+| `download_pdf(judgment)` | No | `JudgmentResult` | Download PDF for a single judgment (sets `pdf_bytes` in place) |
+| `download_pdfs(judgments, *, batch_size=25)` | No | `list[JudgmentResult]` | Batch download with auto session reset |
+
+`search_opt` values: `"PHRASE"` (exact phrase), `"ANY"` (any word), `"ALL"` (all words).
+`court_type` values: `"2"` (High Courts), `"3"` (Supreme Court Reports).
 
 ## DistrictCourtClient Methods
 
@@ -158,11 +204,11 @@ All search methods require `state_code`, `dist_code`, `court_complex_code`, and 
 | `list_districts(state_code)` | No | `dict[str, str]` | Districts for a state |
 | `list_complexes(state_code, dist_code)` | No | `dict[str, str]` | Court complexes (value format: `code@ests@flag`) |
 | `list_establishments(state_code, dist_code, complex_code)` | No | `dict[str, str]` | Establishments (when flag=Y) |
-| `list_case_types(state_code, dist_code, complex_code, est_code)` | No | `dict[str, str]` | Case type codes |
-| `case_status(*, state_code, dist_code, court_complex_code, est_code, case_type, case_number, year)` | Yes | `list[CaseInfo]` | Search by case number |
-| `case_status_by_party(*, state_code, dist_code, court_complex_code, est_code, party_name, year)` | Yes | `list[CaseInfo]` | Search by party name |
-| `court_orders(*, state_code, dist_code, court_complex_code, est_code, case_type, case_number, year)` | Yes | `list[CaseOrder]` | Get orders for a case |
-| `cause_list(*, state_code, dist_code, court_complex_code, est_code, civil=True)` | Yes | `list[CauseListEntry]` | Cause list entries |
+| `list_case_types(state_code, dist_code, complex_code, est_code="")` | No | `dict[str, str]` | Case type codes |
+| `case_status(*, state_code, dist_code, court_complex_code, est_code="", case_type, case_number, year)` | Yes | `list[CaseInfo]` | Search by case number |
+| `case_status_by_party(*, state_code, dist_code, court_complex_code, est_code="", party_name, year, status_filter="Both")` | Yes | `list[CaseInfo]` | Search by party name |
+| `court_orders(*, state_code, dist_code, court_complex_code, est_code="", case_type, case_number, year)` | Yes | `list[CaseOrder]` | Get orders for a case |
+| `cause_list(*, state_code, dist_code, court_complex_code, est_code="", court_no="", causelist_date="", civil=True)` | Yes | `list[CauseListEntry]` | Cause list entries |
 
 Use `parse_complex_value(value)` from `bharat_courts.districtcourts.parser` to extract `(complex_code, est_codes, needs_establishment)` from the complex dropdown values.
 
@@ -170,47 +216,49 @@ Use `parse_complex_value(value)` from `bharat_courts.districtcourts.parser` to e
 
 All models support `to_dict()` and `to_json()` for serialization.
 
-- **CaseInfo**: `case_number`, `case_type`, `cnr_number`, `petitioner`, `respondent`, `status`, `registration_date`, `court_name`
-- **CaseOrder**: `order_date`, `order_type`, `judge`, `pdf_url`
-- **CauseListPDF**: `serial_number`, `bench`, `cause_list_type`, `pdf_url`
-- **CauseListEntry**: `serial_number`, `case_number`, `petitioner`, `respondent`, `court_number`, `judge`
-- **JudgmentResult**: `title`, `case_number`, `court_name`, `judgment_date`, `judges`, `pdf_url`
+- **CaseInfo**: `case_number`, `case_type`, `cnr_number`, `filing_number`, `registration_number`, `registration_date`, `petitioner`, `respondent`, `status`, `court_name`, `judges`, `next_hearing_date`
+- **CaseOrder**: `order_date`, `order_type`, `judge`, `pdf_url`, `pdf_bytes`, `order_text`
+- **CauseListPDF**: `serial_number`, `bench`, `cause_list_type`, `pdf_url` (HC Services — one PDF per bench)
+- **CauseListEntry**: `serial_number`, `case_number`, `case_type`, `petitioner`, `respondent`, `advocate_petitioner`, `advocate_respondent`, `court_number`, `judge`, `listing_date`, `item_number` (District Courts — structured entries)
+- **JudgmentResult**: `title`, `court_name`, `case_number`, `judgment_date`, `judges`, `pdf_url`, `pdf_bytes`, `citation`, `bench_type`, `source_url`, `source_id`, `metadata`
+- **SearchResult**: `items`, `total_count`, `page`, `page_size`, `has_next`, `total_pages` (paginated container)
 
 ## CAPTCHA Handling
 
-Both HC Services and District Courts use Securimage CAPTCHAs. The OCR solver (`ddddocr`) has ~60% accuracy with automatic retry (up to 3 attempts with fresh sessions).
+Both HC Services and District Courts use Securimage CAPTCHAs. Two auto-solvers are available:
 
 ```python
+# Option 1: ddddocr (pip install bharat-courts[ocr])
 from bharat_courts.captcha.ocr import OCRCaptchaSolver
-solver = OCRCaptchaSolver()
+solver = OCRCaptchaSolver()  # ~60% accuracy, auto-retry with fresh sessions
 
-# Or implement a custom solver:
+# Option 2: ONNX model (pip install bharat-courts[onnx])
+# REQUIRES HF_TOKEN env var — the model is downloaded from HuggingFace
+# Get a token at https://huggingface.co/settings/tokens
+# export HF_TOKEN=hf_...
+from bharat_courts.captcha.onnx import ONNXCaptchaSolver
+solver = ONNXCaptchaSolver()  # lighter, uses onnxruntime, needs HF auth
+
+# Option 3: Manual input
+from bharat_courts.captcha.manual import ManualCaptchaSolver
+solver = ManualCaptchaSolver()  # prompts on stdin
+
+# Option 4: Custom solver
 from bharat_courts.captcha.base import CaptchaSolver
 class MySolver(CaptchaSolver):
     async def solve(self, image_bytes: bytes) -> str:
         return "solved_text"
 ```
 
-## Judgment Search Portal
-
-```python
-from bharat_courts import JudgmentSearchClient, get_court
-
-async with JudgmentSearchClient() as client:
-    result = await client.search(
-        get_court("delhi"),
-        from_date="01-01-2024",
-        to_date="31-01-2024",
-    )
-    for j in result.items:
-        print(f"{j.title} — {j.judgment_date}")
-```
-
 ## Important Notes
 
 - All methods are async — use `asyncio.run()` or `await`
-- CAPTCHA is pinned to PHP session — the library handles session management automatically
-- `rgyear` / `year` is mandatory for party name search
-- Case type codes can be discovered via `list_case_types()`
+- **Default CAPTCHA solver is OCRCaptchaSolver (ddddocr)** — no explicit solver needed if `bharat-courts[ocr]` is installed. Clients auto-detect the best available solver.
+- **ONNXCaptchaSolver requires `HF_TOKEN`** — the ONNX model is hosted on HuggingFace which requires authentication. Set `export HF_TOKEN=hf_...` before use. Prefer OCRCaptchaSolver unless you have a specific reason to use ONNX.
+- CAPTCHA is pinned to PHP session — the library creates fresh sessions on each retry automatically
+- `year` is mandatory for party name search (server returns ERROR_VAL if empty)
+- Case type codes are numeric and vary by court — discover via `list_case_types()`
 - Rate limiting is built in (default 1 second between requests)
 - District courts require dynamic court discovery (state → district → complex → establishment) unlike High Courts which use static `get_court()` codes
+- JudgmentSearchClient only supports keyword search — there is no search by party name, CNR, or case number on the judgments portal
+- Some order PDFs may not be uploaded on eCourts even when the case exists — `court_orders()` will return the URL but the PDF download may return an error from the server

@@ -207,6 +207,69 @@ async def test_download_pdfs_batch_reset():
 
 
 @respx.mock
+async def test_authenticate_calls_init_session_every_retry():
+    """Verify _init_session is called on every CAPTCHA retry attempt, not just once."""
+    init_session_count = 0
+    captcha_attempt = 0
+
+    def route_get(request: httpx.Request) -> httpx.Response:
+        nonlocal init_session_count
+        url = str(request.url)
+        if "securimage" in url:
+            return httpx.Response(200, content=b"captcha-img")
+        # Main page (init_session)
+        init_session_count += 1
+        return httpx.Response(200, text="<html></html>")
+
+    def route_captcha_check(request: httpx.Request) -> httpx.Response:
+        nonlocal captcha_attempt
+        captcha_attempt += 1
+        # Fail first two attempts, succeed on third
+        if captcha_attempt < 3:
+            return httpx.Response(200, json={"captcha_status": "N", "errormsg": "Wrong"})
+        return httpx.Response(200, json={"captcha_status": "Y", "app_token": "tok"})
+
+    respx.get(url__regex=r".*").mock(side_effect=route_get)
+    respx.post(endpoints.CHECK_CAPTCHA_URL).mock(side_effect=route_captcha_check)
+
+    client = JudgmentSearchClient(captcha_solver=_FixedCaptchaSolver())
+    async with client:
+        result = await client._authenticate("test", max_captcha_attempts=3)
+
+    assert result == "abc123"
+    # _init_session should be called 3 times (once per attempt)
+    assert init_session_count == 3
+
+
+@respx.mock
+async def test_reset_session_for_downloads_uses_authenticate():
+    """Verify _reset_session_for_downloads calls _authenticate and resets counter."""
+    init_session_count = 0
+
+    def route_get(request: httpx.Request) -> httpx.Response:
+        nonlocal init_session_count
+        url = str(request.url)
+        if "securimage" in url:
+            return httpx.Response(200, content=b"captcha-img")
+        init_session_count += 1
+        return httpx.Response(200, text="<html></html>")
+
+    respx.get(url__regex=r".*").mock(side_effect=route_get)
+    respx.post(endpoints.CHECK_CAPTCHA_URL).mock(
+        return_value=httpx.Response(200, json={"captcha_status": "Y", "app_token": "tok"})
+    )
+
+    client = JudgmentSearchClient(captcha_solver=_FixedCaptchaSolver())
+    async with client:
+        client._download_count = 25
+        ok = await client._reset_session_for_downloads()
+
+    assert ok is True
+    assert client._download_count == 0
+    assert init_session_count >= 1
+
+
+@respx.mock
 async def test_download_pdfs_skips_already_downloaded():
     """Test that already-downloaded judgments are skipped."""
     pdf_content = b"%PDF-1.4 valid" + b"\x00" * 500
