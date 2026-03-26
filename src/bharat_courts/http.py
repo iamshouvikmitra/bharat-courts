@@ -1,7 +1,10 @@
 """Rate-limited async HTTP client with retry logic."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
+import ssl
 
 import httpx
 
@@ -11,19 +14,39 @@ from bharat_courts.config import config as default_config
 logger = logging.getLogger(__name__)
 
 
+def create_legacy_ssl_context() -> ssl.SSLContext:
+    """Create an SSL context that allows legacy server renegotiation.
+
+    Some government websites (e.g. calcuttahighcourt.gov.in) use outdated
+    TLS configurations that require this workaround.
+    """
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    ctx.options |= 0x4  # SSL_OP_LEGACY_SERVER_CONNECT
+    return ctx
+
+
 class RateLimitedClient:
     """Async HTTP client with rate limiting, retries, and SSL bypass.
 
     Government websites often have expired/invalid SSL certs, so verification
-    is disabled by default.
+    is disabled by default. For sites requiring legacy SSL renegotiation,
+    pass ``ssl_context=create_legacy_ssl_context()``.
     """
 
-    def __init__(self, config: BharatCourtsConfig | None = None):
+    def __init__(
+        self,
+        config: BharatCourtsConfig | None = None,
+        ssl_context: ssl.SSLContext | None = None,
+    ):
         self._config = config or default_config
+        self._ssl_context = ssl_context
         self._client: httpx.AsyncClient | None = None
 
     def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
+            verify: bool | ssl.SSLContext = self._ssl_context if self._ssl_context else False
             self._client = httpx.AsyncClient(
                 timeout=self._config.timeout,
                 headers={
@@ -33,7 +56,7 @@ class RateLimitedClient:
                     "X-Requested-With": "XMLHttpRequest",
                 },
                 follow_redirects=True,
-                verify=False,
+                verify=verify,
             )
         return self._client
 

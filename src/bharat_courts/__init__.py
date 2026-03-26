@@ -1,6 +1,7 @@
 """bharat-courts — Async Python client for Indian court data."""
 
 from bharat_courts._version import __version__
+from bharat_courts.calcuttahc.client import CalcuttaHCClient
 from bharat_courts.config import BharatCourtsConfig, config
 from bharat_courts.courts import (
     ALL_COURTS,
@@ -30,6 +31,7 @@ __all__ = [
     "__version__",
     "ALL_COURTS",
     "BharatCourtsConfig",
+    "CalcuttaHCClient",
     "CaptchaError",
     "DistrictCourtClient",
     "CaseInfo",

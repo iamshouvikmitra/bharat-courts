@@ -85,7 +85,9 @@ async def try_judgment_search():
         print("\n=== Judgment Search ===")
         query = "Sourav Roy Bhowmik"
         print(f"Searching: '{query}'")
-        result = await client.search(query, search_opt="ALL", court_type="2", max_captcha_attempts=5)
+        result = await client.search(
+            query, search_opt="ALL", court_type="2", max_captcha_attempts=5
+        )
         print(f"Results: {result.total_count} total, {len(result.items)} on this page")
 
         for j in result.items:

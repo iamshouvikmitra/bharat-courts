@@ -137,6 +137,39 @@ async def main():
 asyncio.run(main())
 ```
 
+## Calcutta High Court (Direct)
+
+Search orders/judgments directly on calcuttahighcourt.gov.in — has better PDF coverage than eCourts for Calcutta HC cases from September 2020 onwards.
+
+```python
+from bharat_courts import CalcuttaHCClient
+
+async def main():
+    async with CalcuttaHCClient() as client:
+        # Search by case number
+        orders = await client.search_orders(
+            case_type="12",        # WPA
+            case_number="12886",
+            year="2024",
+            establishment="appellate",  # or "original", "jalpaiguri", "portblair"
+        )
+        for order in orders:
+            print(f"{order.order_date} | {order.judge} | {order.neutral_citation}")
+            if order.pdf_url:
+                pdf = await client.download_order_pdf(order.pdf_url)
+
+asyncio.run(main())
+```
+
+### CalcuttaHCClient Methods
+
+| Method | CAPTCHA | Returns | Description |
+|--------|---------|---------|-------------|
+| `search_orders(*, case_type, case_number, year, establishment="appellate", max_captcha_attempts=3)` | Yes | `list[CaseOrder]` | Search orders by case number |
+| `download_order_pdf(pdf_url)` | No | `bytes` | Download order PDF |
+
+`establishment` values: `"appellate"`, `"original"`, `"jalpaiguri"`, `"portblair"`.
+
 ## Available High Courts
 
 Use `get_court(code)` with any of these codes:

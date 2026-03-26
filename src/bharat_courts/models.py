@@ -116,6 +116,7 @@ class CaseOrder(_Serializable):
     pdf_url: str = ""
     pdf_bytes: bytes | None = None
     order_text: str = ""
+    neutral_citation: str = ""
 
 
 @dataclass

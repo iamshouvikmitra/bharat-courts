@@ -209,6 +209,7 @@ with open("matters.json", "w") as f:
 | [District Courts](https://services.ecourts.gov.in) | `DistrictCourtClient` | Case status, orders, cause lists across 700+ courts |
 | [Judgment Search](https://judgments.ecourts.gov.in) | `JudgmentSearchClient` | Search, pagination, bulk PDF download |
 | [Supreme Court](https://main.sci.gov.in) | `SCIClient` | Basic search |
+| [Calcutta High Court](https://calcuttahighcourt.gov.in) | `CalcuttaHCClient` | Order/judgment search + PDF download (direct from HC website) |
 
 ## API Reference
 
@@ -221,15 +222,15 @@ from bharat_courts import HCServicesClient
 
 client = HCServicesClient(
     config=None,            # BharatCourtsConfig | None — uses global config singleton if None
-    captcha_solver=None,    # CaptchaSolver | None — defaults to ManualCaptchaSolver()
+    captcha_solver=None,    # CaptchaSolver | None — defaults to OCRCaptchaSolver if ddddocr installed
     http_client=None,       # RateLimitedClient | None — creates one internally if None
 )
 ```
 
-Use as an async context manager:
+Use as an async context manager (no solver needed if `bharat-courts[ocr]` is installed):
 
 ```python
-async with HCServicesClient(captcha_solver=solver) as client:
+async with HCServicesClient() as client:
     ...
 ```
 
@@ -419,7 +420,7 @@ from bharat_courts import DistrictCourtClient
 
 client = DistrictCourtClient(
     config=None,            # BharatCourtsConfig | None
-    captcha_solver=None,    # CaptchaSolver | None — defaults to ManualCaptchaSolver()
+    captcha_solver=None,    # CaptchaSolver | None — defaults to OCRCaptchaSolver if ddddocr installed
     http_client=None,       # RateLimitedClient | None
 )
 ```
@@ -427,7 +428,7 @@ client = DistrictCourtClient(
 Use as an async context manager:
 
 ```python
-async with DistrictCourtClient(captcha_solver=solver) as client:
+async with DistrictCourtClient() as client:
     ...
 ```
 
@@ -716,6 +717,59 @@ Download the PDF for a Supreme Court judgment.
 
 ---
 
+### `CalcuttaHCClient`
+
+Client for Calcutta High Court's own website (`calcuttahighcourt.gov.in`). Provides order/judgment search with PDF download for cases from September 2020 onwards (CIS system). Has better PDF coverage than the eCourts portal for Calcutta HC cases.
+
+```python
+from bharat_courts import CalcuttaHCClient
+
+async with CalcuttaHCClient() as client:
+    ...
+```
+
+---
+
+#### `search_orders(*, case_type, case_number, year, establishment="appellate", max_captcha_attempts=3) -> list[CaseOrder]`
+
+Search for orders/judgments by case number. **CAPTCHA required** (auto-retried).
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `case_type` | `str` | Yes | — | Numeric case type code (e.g. `"12"` for WPA) |
+| `case_number` | `str` | Yes | — | Case registration number |
+| `year` | `str` | Yes | — | Case year |
+| `establishment` | `str` | No | `"appellate"` | `"appellate"`, `"original"`, `"jalpaiguri"`, or `"portblair"` |
+| `max_captcha_attempts` | `int` | No | `3` | Max CAPTCHA retries |
+
+**Returns:** `list[CaseOrder]` — orders with `neutral_citation` and `pdf_url` populated.
+
+```python
+orders = await client.search_orders(
+    case_type="12",        # WPA
+    case_number="12886",
+    year="2024",
+    establishment="appellate",
+)
+for order in orders:
+    print(f"{order.order_date}: {order.order_type} by {order.judge}")
+    print(f"  Neutral Citation: {order.neutral_citation}")
+    if order.pdf_url:
+        pdf = await client.download_order_pdf(order.pdf_url)
+```
+
+---
+
+#### `download_order_pdf(pdf_url) -> bytes`
+
+Download an order/judgment PDF. **No CAPTCHA required.**
+
+```python
+pdf_bytes = await client.download_order_pdf(order.pdf_url)
+```
+
+---
+
 ### Court Registry Functions
 
 ```python
@@ -842,6 +896,7 @@ class CaseOrder:
     pdf_url: str = ""
     pdf_bytes: bytes | None = None   # populated by download_order_pdf(); excluded from serialization
     order_text: str = ""
+    neutral_citation: str = ""  # e.g. "2024:CHC-AS:1277" (Calcutta HC)
 ```
 
 #### `CauseListPDF`
@@ -948,7 +1003,9 @@ solver = OCRCaptchaSolver(
 
 #### `ONNXCaptchaSolver`
 
-Lightweight CAPTCHA solver using ONNX Runtime. Requires `pip install bharat-courts[onnx]`. Uses a pre-trained model from HuggingFace (captchabreaker), downloaded lazily to `~/.cache/bharat-courts/` on first use.
+Lightweight CAPTCHA solver using ONNX Runtime. Requires `pip install bharat-courts[onnx]`. Uses a pre-trained model from HuggingFace (captchabreaker), downloaded to `~/.cache/bharat-courts/` at init time.
+
+**Requires `HF_TOKEN`**: The HuggingFace model repo requires authentication. Set `export HF_TOKEN=hf_...` (get a token at https://huggingface.co/settings/tokens). If you don't have a token, use `OCRCaptchaSolver` instead.
 
 ```python
 from bharat_courts.captcha.onnx import ONNXCaptchaSolver
@@ -1099,7 +1156,7 @@ source .venv/bin/activate   # Linux/macOS
 pip install -e ".[all]"
 
 # 4. Verify everything works
-pytest                                    # 96 unit tests, no network needed
+pytest                                    # 112 unit tests, no network needed
 ruff check . && ruff format --check .     # lint + format check
 ```
 
@@ -1161,6 +1218,10 @@ src/bharat_courts/
 │   ├── client.py        # DistrictCourtClient
 │   ├── endpoints.py     # URL + form builders + state codes
 │   └── parser.py        # HTML response parsers
+├── calcuttahc/          # Calcutta High Court (direct website)
+│   ├── client.py        # CalcuttaHCClient
+│   ├── endpoints.py     # URL + form builders
+│   └── parser.py        # JSON + HTML response parsers
 ├── judgments/            # Judgment Search portal (basic)
 │   ├── client.py
 │   ├── endpoints.py
