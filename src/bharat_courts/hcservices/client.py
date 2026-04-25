@@ -359,4 +359,10 @@ class HCServicesClient:
                 "Accept": "application/pdf,*/*",
             },
         )
-        return resp.content
+        content = resp.content
+        if content[:4] != b"%PDF":
+            raise RuntimeError(
+                f"PDF download did not return a valid PDF "
+                f"(got {len(content)} bytes; head={content[:64]!r})"
+            )
+        return content

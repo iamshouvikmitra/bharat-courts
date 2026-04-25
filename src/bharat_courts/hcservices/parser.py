@@ -122,9 +122,13 @@ def parse_case_status(raw: str) -> list[CaseInfo]:
     """Parse case status search results (JSON response from showRecords).
 
     The response envelope is ``{"con": ["[{...}]"], "totRecords": N}``.
-    Each record in the inner array has at least:
-    ``cino``, ``case_no``, ``case_no2``, ``case_type``, ``case_year``,
-    ``pet_name``, ``res_name``, ``orderurlpath``.
+    Each record in the inner array has these fields (verified live):
+    ``orderurlpath, case_no, pet_name, case_no2, case_year, res_name,
+    lpet_name, lres_name, cino, party_name1, party_name2, type_name``.
+
+    Note: ``status``, ``status_name``, and ``reg_date`` are **not** returned
+    by the showRecords endpoint. Status / registration date come from
+    ``o_civil_case_history.php`` and are not populated here.
     """
     # Fall back to HTML parsing if the response is an HTML table
     if "<table" in raw.lower():
@@ -133,21 +137,19 @@ def parse_case_status(raw: str) -> list[CaseInfo]:
     records, total = _parse_json_envelope(raw)
     results = []
     for rec in records:
-        case_type_code = str(rec.get("case_type", ""))
-        case_no = str(rec.get("case_no2", ""))
+        case_no2 = str(rec.get("case_no2", ""))
         case_year = str(rec.get("case_year", ""))
-        case_number_display = f"{case_no}/{case_year}" if case_no and case_year else ""
+        case_number_display = f"{case_no2}/{case_year}" if case_no2 and case_year else ""
 
         results.append(
             CaseInfo(
                 case_number=case_number_display,
-                case_type=case_type_code,
-                cnr_number=rec.get("cino", ""),
+                case_type=rec.get("type_name") or "",
+                cnr_number=rec.get("cino") or "",
+                filing_number=rec.get("case_no") or "",
+                registration_number=case_no2,
                 petitioner=rec.get("pet_name") or "",
                 respondent=rec.get("res_name") or "",
-                status=rec.get("status_name") or rec.get("status") or "",
-                registration_date=_parse_date(rec.get("reg_date", "")),
-                filing_number=rec.get("case_no", ""),
             )
         )
 

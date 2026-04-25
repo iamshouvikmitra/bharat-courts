@@ -93,7 +93,7 @@ class CaseInfo(_Serializable):
     """Basic case metadata from a search result."""
 
     case_number: str  # e.g. "3/2024"
-    case_type: str  # Numeric case type code (e.g. "3" for EL.PET.)
+    case_type: str  # Case type label (e.g. "W.P.(C)")
     cnr_number: str = ""  # Court Number Record, e.g. "DLHC010582482024"
     filing_number: str = ""
     registration_number: str = ""

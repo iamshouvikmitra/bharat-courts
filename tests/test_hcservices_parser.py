@@ -23,14 +23,24 @@ def test_parse_case_status_json(hcservices_case_status_json):
     case1 = results[0]
     assert case1.cnr_number == "DLHC010582482024"
     assert case1.case_number == "3/2024"
-    assert case1.case_type == "3"
+    # case_type is now sourced from `type_name` (the real portal field)
+    assert case1.case_type == "W.P.(C)"
+    # registration_number is sourced from `case_no2`
+    assert case1.registration_number == "3"
+    # filing_number is the long `case_no` string
+    assert case1.filing_number == "200300000032024"
     assert case1.petitioner == "ABC INDUSTRIES LTD"
     assert case1.respondent == "STATE POLLUTION CONTROL BOARD & ORS."
+    # showRecords does not return status / registration_date
+    assert case1.status == ""
+    assert case1.registration_date is None
 
     case2 = results[1]
     assert case2.cnr_number == "DLHC010400092024"
+    assert case2.case_type == "CRL.A."
+    assert case2.registration_number == "9"
     assert case2.petitioner == "XYZ ENTERPRISES PVT LTD"
-    assert case2.status == "Disposed"
+    assert case2.status == ""
 
 
 def test_parse_case_status_json_captcha_error():
@@ -106,11 +116,13 @@ def test_parse_orders_json():
             "orderurlpath": "enc_path_def456",
         },
     ]
-    raw = json.dumps({
-        "con": [json.dumps(records)],
-        "totRecords": "2",
-        "Error": "",
-    })
+    raw = json.dumps(
+        {
+            "con": [json.dumps(records)],
+            "totRecords": "2",
+            "Error": "",
+        }
+    )
 
     results = parse_orders(
         raw,
