@@ -38,3 +38,7 @@ Thumbs.db
 
 # AI agent config
 CLAUDE.md
+
+# Private audit notes
+AUDIT.md
+.claude/
