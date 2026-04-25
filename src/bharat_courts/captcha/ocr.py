@@ -11,7 +11,13 @@ Install: pip install bharat-courts[ocr]
 
 from __future__ import annotations
 
+import logging
+
 from bharat_courts.captcha.base import CaptchaSolver
+
+logger = logging.getLogger(__name__)
+
+_EXPECTED_LENGTH = 6
 
 try:
     import ddddocr
@@ -57,11 +63,26 @@ class OCRCaptchaSolver(CaptchaSolver):
         self._threshold = threshold
 
     async def solve(self, image_bytes: bytes) -> str:
-        """Recognize CAPTCHA text from image bytes."""
+        """Recognize CAPTCHA text from image bytes.
+
+        Returns an empty string if the OCR output isn't a valid 6-char
+        alphanumeric — eCourts portals reject anything else with a
+        length-validation error, so we short-circuit and signal upstream
+        callers to skip this attempt.
+        """
         if self._preprocess:
             image_bytes = self._preprocess_image(image_bytes)
         result = self._ocr.classification(image_bytes)
-        return result.strip()
+        result = result.strip() if isinstance(result, str) else ""
+        if len(result) != _EXPECTED_LENGTH or not result.isalnum():
+            logger.warning(
+                "OCR CAPTCHA decoded %d chars (expected %d): %r",
+                len(result),
+                _EXPECTED_LENGTH,
+                result,
+            )
+            return ""
+        return result
 
     def _preprocess_image(self, image_bytes: bytes) -> bytes:
         """Apply basic image preprocessing to improve OCR accuracy."""

@@ -52,9 +52,13 @@ def test_default_solver_prefers_ocr(monkeypatch):
     from unittest.mock import MagicMock
 
     fake_ocr_module = MagicMock()
-    fake_ocr_class = type("OCRCaptchaSolver", (CaptchaSolver,), {
-        "solve": lambda self, img: "mocked",
-    })
+    fake_ocr_class = type(
+        "OCRCaptchaSolver",
+        (CaptchaSolver,),
+        {
+            "solve": lambda self, img: "mocked",
+        },
+    )
     fake_ocr_module.OCRCaptchaSolver = fake_ocr_class
 
     import sys

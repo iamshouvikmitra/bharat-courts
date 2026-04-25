@@ -119,6 +119,22 @@ class JudgmentSearchClient:
                 "X-Requested-With": "XMLHttpRequest",
             },
         )
+
+        # Portal length-error responses are shaped:
+        #   "Captcha should be less than 6 characters..!<br/>#####<32-128 hex token>"
+        # The hex part is a rotated app_token we should preserve so the next
+        # attempt's request can present a valid token. Without this branch the
+        # `resp.json()` below would raise, we'd log "non-JSON", and lose the token.
+        text = resp.text
+        if "#####" in text:
+            parts = text.split("#####", 1)
+            msg = parts[0].strip()
+            token = parts[1].strip() if len(parts) > 1 else ""
+            if token and 32 <= len(token) <= 128 and all(c in "0123456789abcdef" for c in token):
+                self._app_token = token
+            logger.warning("CAPTCHA validate non-JSON response: %s", msg[:200])
+            return False
+
         try:
             data = resp.json()
         except Exception:
