@@ -17,7 +17,7 @@ India's eCourts platform holds millions of case records across 25+ High Courts, 
 - **Track matters** — search by case number, party name, or advocate across any High Court or District Court
 - **Download orders & judgments** — get PDFs for all orders in a case with one call
 - **Monitor cause lists** — see which cases are listed before which bench, every day
-- **Search Supreme Court judgments** — by party name, year, or keyword
+- **Pull recent Supreme Court judgments** — scrape the homepage's "Latest Judgements / Orders" feed and download the PDFs
 - **Access District Courts** — dynamically discover courts across 36 states/UTs and search 700+ court complexes
 - **Bulk download judgments** — paginate through results, batch-download PDFs with automatic session management
 - **Automate CAPTCHA handling** — built-in OCR solver, ONNX solver, or plug in your own
@@ -68,7 +68,7 @@ async def main():
         )
         for case in cases:
             print(f"{case.case_number}: {case.petitioner} v {case.respondent}")
-            print(f"  Next hearing: {case.next_hearing_date}")
+            print(f"  CNR: {case.cnr_number}")
 
 asyncio.run(main())
 ```
@@ -77,15 +77,18 @@ asyncio.run(main())
 
 ```python
 async with HCServicesClient(captcha_solver=solver) as client:
-    # Look up a specific writ petition
+    # Look up a specific writ petition. `case_type` is the numeric code from
+    # list_case_types() (e.g. "134" = W.P.(C) on Delhi HC).
     cases = await client.case_status(
         get_court("bombay"),
-        case_type="134",       # W.P.(C) — use list_case_types() to discover codes
+        case_type="134",
         case_number="4520",
         year="2023",
     )
-    print(f"Status: {cases[0].status}")
-    print(f"Judges: {', '.join(cases[0].judges)}")
+    # case_type on the result is now a label like "W.P.(C)" (from the
+    # portal's type_name field). The showRecords endpoint does not return
+    # case status, so case.status is always empty.
+    print(f"{cases[0].case_type} {cases[0].case_number} — CNR: {cases[0].cnr_number}")
 
     # Download all orders for the case
     orders = await client.court_orders(
@@ -96,6 +99,8 @@ async with HCServicesClient(captcha_solver=solver) as client:
     )
     for order in orders:
         print(f"{order.order_date} — {order.order_type} by {order.judge}")
+        # download_order_pdf raises RuntimeError if the portal hands back its
+        # 30-byte BOM+error string instead of a real PDF.
         pdf = await client.download_order_pdf(order.pdf_url)
         with open(f"order_{order.order_date}.pdf", "wb") as f:
             f.write(pdf)
@@ -130,27 +135,41 @@ async with DistrictCourtClient(captcha_solver=solver) as client:
     code, ests, needs_est = parse_complex_value(complex_val)
     est = ests[0] if needs_est else ""
 
-    # Search by party name
-    cases = await client.case_status_by_party(
+    # Look up case types — the portal returns codes as "<case_type>^<est>"
+    # compound strings (e.g. "89^2"); pass them back verbatim.
+    case_types = await client.list_case_types("8", "1", code, est)
+    # {"89^2": "ADMINISTRATIVE SUITE", "152^2": "Anticipatory Bail - ABP", ...}
+
+    cases = await client.case_status(
         state_code="8", dist_code="1",
         court_complex_code=code, est_code=est,
-        party_name="kumar", year="2024",
+        case_type="89^2",       # full compound code, not just "89"
+        case_number="100", year="2024",
     )
     for case in cases:
         print(f"{case.case_number}: {case.petitioner} v {case.respondent}")
 ```
 
-### Search Supreme Court judgments
+### List recent Supreme Court judgments
 
 ```python
 from bharat_courts import SCIClient
 
+# www.sci.gov.in surfaces the 50 most recent items inline on the homepage.
+# No CAPTCHA, no search form — just scrape the feed.
 async with SCIClient() as client:
-    judgments = await client.search_by_party("union of india")
-    for j in judgments:
+    recent = await client.list_recent_judgments(limit=10)
+    for j in recent:
         print(f"{j.judgment_date}: {j.title}")
-        print(f"  Bench: {', '.join(j.judges)}")
+        print(f"  Diary: {j.source_id}  {j.case_number}")
+        # Download via /sci-get-pdf/?diary_no=... (portal viewer URL).
+        await client.download_pdf(j)
+        if j.pdf_bytes:
+            with open(f"sci_{j.source_id}.pdf", "wb") as f:
+                f.write(j.pdf_bytes)
 ```
+
+(Date-range / party-name search against the legacy `main.sci.gov.in` host is no longer functional — that host is permanently 503 and the live `www.sci.gov.in` portal gates those flows behind a CAPTCHA-protected case-no/diary-no form that the SDK does not yet wire up. `search_by_year` and `search_by_party` raise `NotImplementedError`.)
 
 ### Use with AI agents (Claude Code, Copilot, etc.)
 
@@ -170,7 +189,7 @@ Then just ask your AI agent:
 
 > "Search for cases filed by State of Bihar in Patna district court in 2024"
 
-> "Search Supreme Court judgments on right to privacy from last year"
+> "Show me the most recent Supreme Court judgments from this week"
 
 The agent uses bharat-courts under the hood — handles CAPTCHA, sessions, and parsing automatically.
 
@@ -190,16 +209,20 @@ with open("matters.json", "w") as f:
 ```json
 [
   {
-    "case_number": "W.P.(C) 3/2024",
+    "case_number": "3/2024",
+    "case_type": "W.P.(C)",
     "cnr_number": "DLHC010582482024",
+    "filing_number": "213400000032024",
+    "registration_number": "3",
     "petitioner": "HDFC BANK LTD.",
     "respondent": "UNION OF INDIA & ORS.",
-    "status": "Pending",
-    "next_hearing_date": "2026-04-15",
-    "judges": ["HON'BLE MR. JUSTICE ..."]
+    "court_name": "Delhi High Court",
+    "judges": []
   }
 ]
 ```
+
+Note: `status`, `registration_date`, `judges`, and `next_hearing_date` are not returned by the live `showRecords` endpoint and stay empty/null. They live behind the case-history endpoint which the SDK does not call yet.
 
 ## Supported Portals
 
@@ -208,7 +231,7 @@ with open("matters.json", "w") as f:
 | [HC Services](https://hcservices.ecourts.gov.in) | `HCServicesClient` | Fully working |
 | [District Courts](https://services.ecourts.gov.in) | `DistrictCourtClient` | Case status, orders, cause lists across 700+ courts |
 | [Judgment Search](https://judgments.ecourts.gov.in) | `JudgmentSearchClient` | Search, pagination, bulk PDF download |
-| [Supreme Court](https://main.sci.gov.in) | `SCIClient` | Basic search |
+| [Supreme Court](https://www.sci.gov.in) | `SCIClient` | Recent judgments feed + PDF download (case-no search not yet implemented) |
 | [Calcutta High Court](https://calcuttahighcourt.gov.in) | `CalcuttaHCClient` | Order/judgment search + PDF download (direct from HC website) |
 
 ## API Reference
@@ -278,7 +301,7 @@ case_types = await client.list_case_types(delhi)
 
 #### `case_status(court, *, case_type, case_number, year, bench_code="1") -> list[CaseInfo]`
 
-Look up case status by case number. **CAPTCHA required** (auto-retried).
+Look up case status by case number. **CAPTCHA required** (auto-retried, default 5 attempts).
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -288,25 +311,29 @@ Look up case status by case number. **CAPTCHA required** (auto-retried).
 | `year` | `str` | Yes | — | Registration year, e.g. `"2024"` |
 | `bench_code` | `str` | No | `"1"` | Bench code from `list_benches()` |
 
-**Returns:** `list[CaseInfo]` — matching cases.
+**Returns:** `list[CaseInfo]` — matching cases. Notable field semantics:
+
+- `case_type` on the result is a **label** like `"W.P.(C)"` (sourced from the portal's `type_name` field), not the numeric code you passed in.
+- `registration_number` is populated from the portal's `case_no2` field.
+- `status` is **always empty** — the live `showRecords` endpoint doesn't return Pending/Disposed (that data lives behind `o_civil_case_history.php`, which the SDK doesn't call yet). Same for `registration_date`, `judges`, and `next_hearing_date`.
 
 ```python
 cases = await client.case_status(
     delhi,
-    case_type="134",      # W.P.(C)
+    case_type="134",      # numeric code from list_case_types()
     case_number="1",
     year="2024",
 )
 for case in cases:
-    print(f"{case.cnr_number}: {case.petitioner} v {case.respondent}")
-    print(f"  Status: {case.status}, Next hearing: {case.next_hearing_date}")
+    print(f"{case.case_type} {case.case_number}  CNR: {case.cnr_number}")
+    print(f"  {case.petitioner} v {case.respondent}")
 ```
 
 ---
 
 #### `case_status_by_party(court, *, party_name, year, bench_code="1", status_filter="Both") -> list[CaseInfo]`
 
-Search cases by party name. **CAPTCHA required** (auto-retried).
+Search cases by party name. **CAPTCHA required** (auto-retried, default 5 attempts).
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -314,9 +341,9 @@ Search cases by party name. **CAPTCHA required** (auto-retried).
 | `party_name` | `str` | Yes | — | Petitioner or respondent name (min 3 characters) |
 | `year` | `str` | Yes | — | Registration year — **mandatory**, server returns error if empty |
 | `bench_code` | `str` | No | `"1"` | Bench code |
-| `status_filter` | `str` | No | `"Both"` | `"Pending"`, `"Disposed"`, or `"Both"` |
+| `status_filter` | `str` | No | `"Both"` | `"Pending"`, `"Disposed"`, or `"Both"` (forwarded to the portal — but the response carries no status field, so filtering happens server-side and the returned `CaseInfo.status` is still empty) |
 
-**Returns:** `list[CaseInfo]` — matching cases.
+**Returns:** `list[CaseInfo]` — matching cases. Same field-population caveats as `case_status` above. Wide queries can return tens of thousands of records in a single response with no pagination — see [issue tracker](https://github.com/iamshouvikmitra/bharat-courts/issues).
 
 ```python
 cases = await client.case_status_by_party(
@@ -401,6 +428,8 @@ Download an order or judgment PDF. **No CAPTCHA required.**
 
 **Returns:** `bytes` — raw PDF file content.
 
+**Raises:** `RuntimeError` if the response doesn't start with the `%PDF` magic bytes. The HC Services portal sometimes hands back a 30-byte BOM-prefixed `"Unable to connect to server"` string with HTTP 200; this method now refuses to silently return that as a PDF.
+
 ```python
 pdf_bytes = await client.download_order_pdf(order.pdf_url)
 with open("order.pdf", "wb") as f:
@@ -481,11 +510,20 @@ establishments = await client.list_establishments("8", "1", "1080010")
 
 ##### `list_case_types(state_code, dist_code, court_complex_code, est_code) -> dict[str, str]`
 
-Get available case types for a court.
+Get available case types for a court. Codes are returned in the portal's compound `"<case_type>^<est_code>"` format — pass them back **verbatim** to `case_status` / `court_orders`; do not strip the `^N` suffix.
 
 ```python
 case_types = await client.list_case_types("8", "1", "1080010", "2")
 # {"89^2": "ADMINISTRATIVE SUITE", "152^2": "Anticipatory Bail - ABP", ...}
+```
+
+##### `list_cause_list_courts(state_code, dist_code, court_complex_code, est_code="") -> dict[str, str]`
+
+Get the courts dropdown for cause-list lookup. Returns a mapping of `court_no` (e.g. `"1@2"`) to court display name (e.g. `"District & Sessions Judge - DJ Div. Patna Sadar"`). The cause-list form requires both — pass either through directly to `cause_list()`, which will look up the matching name automatically if you only know the code.
+
+```python
+courts = await client.list_cause_list_courts("8", "1", "1080010", "2")
+# {"1@2": "District & Sessions Judge - DJ Div. Patna Sadar", ...}
 ```
 
 ---
@@ -496,13 +534,14 @@ All search methods take the 4-level court identifiers as keyword arguments.
 
 ##### `case_status(*, state_code, dist_code, court_complex_code, est_code, case_type, case_number, year) -> list[CaseInfo]`
 
-Search by case number.
+Search by case number. `case_type` must be the full compound `"<code>^<est>"` string from `list_case_types()`.
 
 ```python
 cases = await client.case_status(
     state_code="8", dist_code="1",
     court_complex_code="1080010", est_code="2",
-    case_type="1", case_number="100", year="2024",
+    case_type="89^2",      # full compound code, not just "89"
+    case_number="100", year="2024",
 )
 ```
 
@@ -531,16 +570,17 @@ orders = await client.court_orders(
 )
 ```
 
-##### `cause_list(*, state_code, dist_code, court_complex_code, est_code, court_no="", causelist_date="", civil=True) -> list[CauseListEntry]`
+##### `cause_list(*, state_code, dist_code, court_complex_code, est_code, court_no, court_name="", causelist_date="", civil=True) -> list[CauseListEntry]`
 
-Get cause list entries.
+Get cause list entries. `court_no` is now **required** — discover the available codes via `list_cause_list_courts()`. `court_name` is the option's display label; the portal validates against it (sending an empty `court_name_txt` triggers a `"Court Name is required"` error). If you leave `court_name` blank, this method calls `list_cause_list_courts()` once and looks up the matching label for `court_no`.
 
 ```python
 entries = await client.cause_list(
     state_code="8", dist_code="1",
     court_complex_code="1080010", est_code="2",
+    court_no="1@2",                # required, from list_cause_list_courts()
     civil=True,
-    causelist_date="20-03-2026",  # DD-MM-YYYY, defaults to today
+    causelist_date="20-03-2026",   # DD-MM-YYYY, defaults to today
 )
 for e in entries:
     print(f"#{e.serial_number} {e.case_number} — {e.petitioner} v {e.respondent}")
@@ -561,7 +601,7 @@ async with JudgmentSearchClient(captcha_solver=solver) as client:
 
 ---
 
-#### `search(search_text, *, page=1, search_opt="PHRASE", court_type="2", max_captcha_attempts=3) -> SearchResult`
+#### `search(search_text, *, page=1, page_size=10, search_opt="PHRASE", court_type="2", max_captcha_attempts=5) -> SearchResult`
 
 Search for judgments by keyword. **CAPTCHA required.**
 
@@ -569,11 +609,14 @@ Search for judgments by keyword. **CAPTCHA required.**
 |-----------|------|----------|---------|-------------|
 | `search_text` | `str` | Yes | — | Search query text |
 | `page` | `int` | No | `1` | Page number (1-indexed) |
+| `page_size` | `int` | No | `10` | Rows per page (portal supports 10/25/50/100/1000) |
 | `search_opt` | `str` | No | `"PHRASE"` | `"PHRASE"`, `"ANY"`, or `"ALL"` |
 | `court_type` | `str` | No | `"2"` | `"2"` for High Courts, `"3"` for SCR |
-| `max_captcha_attempts` | `int` | No | `3` | Max CAPTCHA retry attempts |
+| `max_captcha_attempts` | `int` | No | `5` | Max CAPTCHA retry attempts |
 
 **Returns:** `SearchResult` — contains `items: list[JudgmentResult]`, `total_count`, pagination info. Each `JudgmentResult` includes parsed metadata (CNR number, disposal nature, registration date) and `source_id` (CNR) when available.
+
+**Raises:** `CaptchaError` if the CAPTCHA solver couldn't authenticate within `max_captcha_attempts` tries. Empty results now mean "the portal returned zero rows" — they no longer mask a silent CAPTCHA failure (older versions returned `SearchResult()` with no signal).
 
 ```python
 from bharat_courts import JudgmentSearchClient
@@ -591,9 +634,9 @@ async with JudgmentSearchClient(captcha_solver=OCRCaptchaSolver()) as client:
 
 ---
 
-#### `search_all(search_text, *, search_opt="PHRASE", court_type="2", max_captcha_attempts=3) -> AsyncIterator[SearchResult]`
+#### `search_all(search_text, *, page_size=25, search_opt="PHRASE", court_type="2", max_captcha_attempts=5) -> AsyncIterator[SearchResult]`
 
-Iterate through all pages of search results. Yields one `SearchResult` per page, automatically handling pagination, token rotation, and session expiry re-authentication.
+Iterate through all pages of search results. Yields one `SearchResult` per page, automatically handling pagination, token rotation, and session expiry (re-authenticates mid-walk if the portal session lapses).
 
 ```python
 async with JudgmentSearchClient(captcha_solver=solver) as client:
@@ -604,19 +647,24 @@ async with JudgmentSearchClient(captcha_solver=solver) as client:
 
 ---
 
-#### `download_pdf(judgment) -> JudgmentResult`
+#### `download_pdf(judgment, *, court_type="2") -> JudgmentResult`
 
-Download the PDF for a judgment result. Validates the response — rejects empty (0-byte), error (315-byte), and non-PDF responses.
+Download the PDF for a judgment result.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `judgment` | `JudgmentResult` | Yes | A result from `search()` |
+Important: `judgment.pdf_url` is **not** a directly-fetchable URL — it's the row's relative `path` from the portal's `open_pdf(...)` JS handler. This method does the `openpdfcaptcha` resolution dance to obtain a per-session `outputfile` URL, then GETs the actual PDF bytes. Each row's `pdf_val` (also stashed by the parser inside `judgment.metadata`) is forwarded automatically; without it the portal serves the first row's PDF for every subsequent call within the same session.
 
-**Returns:** `JudgmentResult` — the same object with `pdf_bytes` populated (or `None` if the PDF was invalid).
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `judgment` | `JudgmentResult` | Yes | — | A result from `search()` |
+| `court_type` | `str` | No | `"2"` | Same `"2"` / `"3"` as on `search()` |
+
+**Returns:** the same `JudgmentResult` mutated in place — `pdf_bytes` is set on success.
+
+**Raises:** `RuntimeError` if the response is empty, non-JSON, or doesn't start with `%PDF`.
 
 ```python
 judgment = results.items[0]
-judgment = await client.download_pdf(judgment)
+await client.download_pdf(judgment)
 if judgment.pdf_bytes:
     with open("judgment.pdf", "wb") as f:
         f.write(judgment.pdf_bytes)
@@ -624,16 +672,17 @@ if judgment.pdf_bytes:
 
 ---
 
-#### `download_pdfs(judgments, *, batch_size=25) -> list[JudgmentResult]`
+#### `download_pdfs(judgments, *, court_type="2", stop_on_error=False) -> list[JudgmentResult]`
 
-Bulk-download PDFs for multiple judgments. Resets the session every `batch_size` downloads to avoid per-download CAPTCHAs (the portal requires CAPTCHAs after 25 downloads per session). Skips judgments that already have `pdf_bytes`.
+Bulk-download PDFs for multiple judgments. Skips entries that already have `pdf_bytes` set. Failed downloads are logged at WARNING level by default; pass `stop_on_error=True` to raise on the first failure instead.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `judgments` | `list[JudgmentResult]` | Yes | — | Judgments to download PDFs for |
-| `batch_size` | `int` | No | `25` | Downloads before session reset |
+| `court_type` | `str` | No | `"2"` | Forwarded to each `download_pdf` call |
+| `stop_on_error` | `bool` | No | `False` | Re-raise the first download exception instead of logging it |
 
-**Returns:** `list[JudgmentResult]` — the same list with `pdf_bytes` populated where successful.
+**Returns:** the same list, with `pdf_bytes` populated where successful.
 
 ```python
 async with JudgmentSearchClient(captcha_solver=solver) as client:
@@ -649,71 +698,64 @@ async with JudgmentSearchClient(captcha_solver=solver) as client:
 
 ### `SCIClient`
 
-Client for the Supreme Court of India (`main.sci.gov.in`). **No CAPTCHA required.**
+Client for the Supreme Court of India (`www.sci.gov.in`). **No CAPTCHA required.**
+
+The legacy host (`main.sci.gov.in`) that older versions of this SDK targeted has been in long-term maintenance for years and now returns HTTP 503 to every path. The live site is `www.sci.gov.in` (WordPress); `SCIClient` was rewritten against it.
 
 ```python
 from bharat_courts import SCIClient
 
-# Note: no captcha_solver parameter — SCI doesn't use CAPTCHAs
+# Note: no captcha_solver parameter — the homepage feed doesn't use CAPTCHAs
 async with SCIClient() as client:
     ...
 ```
 
 ---
 
-#### `search_by_year(year, month=None) -> list[JudgmentResult]`
+#### `list_recent_judgments(*, limit=50) -> list[JudgmentResult]`
 
-Search Supreme Court judgments by year and optional month.
+Scrape the homepage's "Latest Judgements / Orders" feed. Returns the 50 most recent items the portal surfaces inline (the portal caps it at 50 — pass a smaller `limit` to truncate).
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `year` | `int` | Yes | — | Year to search, e.g. `2024` |
-| `month` | `int \| None` | No | `None` | Month (1-12). If `None`, searches the full year. |
+| `limit` | `int` | No | `50` | Max items to return |
 
-**Returns:** `list[JudgmentResult]`
+**Returns:** `list[JudgmentResult]` — each carries:
+
+- `title` — `"PETITIONER VS. RESPONDENT"`
+- `case_number` — e.g. `"C.A. No. 6677/2026"`
+- `judgment_date` — parsed from the row's "DD-MMM-YYYY" tail
+- `source_id` — diary number (the portal's primary key)
+- `pdf_url` — the `/sci-get-pdf/?diary_no=...` URL the in-page viewer iframe uses
+- `source_url` — the matching `/view-pdf/?diary_no=...` URL (for opening in a browser)
+- `metadata["petitioner"]`, `metadata["respondent"]`, `metadata["type"]` (`"j"` = judgment, `"o"` = order)
 
 ```python
-from bharat_courts import SCIClient
-
 async with SCIClient() as client:
-    # All judgments from June 2024
-    judgments = await client.search_by_year(2024, month=6)
-    for j in judgments:
-        print(f"{j.judgment_date}: {j.title}")
-
-    # All judgments from 2024
-    all_2024 = await client.search_by_year(2024)
-```
-
----
-
-#### `search_by_party(party_name) -> list[JudgmentResult]`
-
-Search Supreme Court judgments by party name.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `party_name` | `str` | Yes | Party name to search |
-
-**Returns:** `list[JudgmentResult]`
-
-```python
-judgments = await client.search_by_party("union of india")
-for j in judgments:
-    print(f"{j.case_number}: {j.title}")
+    recent = await client.list_recent_judgments(limit=10)
+    for j in recent:
+        print(f"{j.judgment_date}: {j.title}  [diary {j.source_id}]")
 ```
 
 ---
 
 #### `download_pdf(judgment) -> JudgmentResult`
 
-Download the PDF for a Supreme Court judgment.
+Download the PDF bytes for a Supreme Court judgment via the `/sci-get-pdf/?diary_no=...` endpoint.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `judgment` | `JudgmentResult` | Yes | A result from search methods |
+| `judgment` | `JudgmentResult` | Yes | An item from `list_recent_judgments()` |
 
-**Returns:** `JudgmentResult` — same object with `pdf_bytes` populated.
+**Returns:** the same `JudgmentResult` with `pdf_bytes` populated.
+
+**Raises:** `RuntimeError` if the response doesn't start with `%PDF`.
+
+---
+
+#### `search_by_year(year, month=None)` and `search_by_party(party_name)` — not implemented
+
+Both methods now raise `NotImplementedError`. The legacy `main.sci.gov.in` form they hit is permanently 503; the equivalent flow on `www.sci.gov.in` is gated behind a CAPTCHA-protected case-no/diary-no/party-name form (`/judgements-case-no/`) that the SDK does not yet wire up. Use `list_recent_judgments()` for the most recent items.
 
 ---
 
@@ -730,9 +772,9 @@ async with CalcuttaHCClient() as client:
 
 ---
 
-#### `search_orders(*, case_type, case_number, year, establishment="appellate", max_captcha_attempts=3) -> list[CaseOrder]`
+#### `search_orders(*, case_type, case_number, year, establishment="appellate", max_captcha_attempts=5) -> tuple[CaseInfo | None, list[CaseOrder]]`
 
-Search for orders/judgments by case number. **CAPTCHA required** (auto-retried).
+Search for orders/judgments by case number. **CAPTCHA required** (auto-retried, default 5 attempts).
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -740,17 +782,20 @@ Search for orders/judgments by case number. **CAPTCHA required** (auto-retried).
 | `case_number` | `str` | Yes | — | Case registration number |
 | `year` | `str` | Yes | — | Case year |
 | `establishment` | `str` | No | `"appellate"` | `"appellate"`, `"original"`, `"jalpaiguri"`, or `"portblair"` |
-| `max_captcha_attempts` | `int` | No | `3` | Max CAPTCHA retries |
+| `max_captcha_attempts` | `int` | No | `5` | Max CAPTCHA retries |
 
-**Returns:** `list[CaseOrder]` — orders with `neutral_citation` and `pdf_url` populated.
+**Returns:** `tuple[CaseInfo | None, list[CaseOrder]]`. The `CaseInfo` carries the case-level metadata the portal returns alongside the order rows (parties, CNR, full case number, side); previous versions silently dropped this. Returns `(None, [])` when nothing matched.
 
 ```python
-orders = await client.search_orders(
+case_info, orders = await client.search_orders(
     case_type="12",        # WPA
     case_number="12886",
     year="2024",
     establishment="appellate",
 )
+if case_info:
+    print(f"{case_info.case_number}  CNR: {case_info.cnr_number}")
+    print(f"  {case_info.petitioner} v {case_info.respondent}")
 for order in orders:
     print(f"{order.order_date}: {order.order_type} by {order.judge}")
     print(f"  Neutral Citation: {order.neutral_citation}")
@@ -763,6 +808,8 @@ for order in orders:
 #### `download_order_pdf(pdf_url) -> bytes`
 
 Download an order/judgment PDF. **No CAPTCHA required.**
+
+**Raises:** `RuntimeError` if the response doesn't start with the `%PDF` magic bytes.
 
 ```python
 pdf_bytes = await client.download_order_pdf(order.pdf_url)
@@ -870,14 +917,14 @@ Returned by `case_status()` and `case_status_by_party()`.
 @dataclass
 class CaseInfo:
     case_number: str                        # "3/2024"
-    case_type: str                          # Numeric code, e.g. "3"
+    case_type: str                          # Case type label, e.g. "W.P.(C)"
     cnr_number: str = ""                    # "DLHC010582482024"
     filing_number: str = ""
     registration_number: str = ""
     registration_date: date | None = None
     petitioner: str = ""
     respondent: str = ""
-    status: str = ""                        # "Pending" | "Disposed"
+    status: str = ""                        # empty for HC Services (showRecords doesn't return it)
     court_name: str = ""
     judges: list[str] = []
     next_hearing_date: date | None = None
@@ -915,7 +962,7 @@ class CauseListPDF:
 
 #### `JudgmentResult`
 
-Returned by `JudgmentSearchClient.search()`, `SCIClient.search_by_year()`, and `SCIClient.search_by_party()`.
+Returned by `JudgmentSearchClient.search()` / `search_all()` and `SCIClient.list_recent_judgments()`.
 
 ```python
 @dataclass
@@ -999,7 +1046,7 @@ solver = OCRCaptchaSolver(
 )
 ```
 
-~60% accuracy. Failed attempts are automatically retried with fresh sessions.
+~75% accuracy on the judgments portal in our measurements; failed attempts are automatically retried with fresh sessions (default 5 retries — `P(all fail) ≈ 0.1%`). Outputs that aren't exactly 6 alphanumeric characters are rejected before being submitted, so the portal's "captcha must be 6 chars" envelope no longer burns a retry.
 
 #### `ONNXCaptchaSolver`
 
@@ -1058,28 +1105,71 @@ async with HCServicesClient(captcha_solver=MyCaptchaSolver()) as client:
 
 ## CLI
 
+The CLI is organised into one command group per portal, matching the SDK module layout:
+
+```
+bharat-courts version
+bharat-courts courts [--type all|hc|sc]
+bharat-courts hcservices       benches | case-types | search | search-by-party | orders | cause-list
+bharat-courts districtcourts   states | districts | complexes | establishments | case-types | courts | search | search-by-party | orders | cause-list
+bharat-courts calcuttahc       search
+bharat-courts judgments        search | search-all
+bharat-courts sci              recent
+bharat-courts install-skills
+```
+
+Global flags (apply to every subcommand):
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Emit machine-readable JSON instead of formatted text. Lists return arrays; single dataclasses return objects; `calcuttahc search` returns `{"case_info": ..., "orders": [...]}`. |
+| `--captcha-attempts N` | Override the default CAPTCHA retry budget (5). Currently honoured by `judgments` and `calcuttahc`; `hcservices` and `districtcourts` use a fixed internal budget. |
+| `--verbose` / `-v` | Enable INFO-level SDK logging on stderr. |
+
+Every PDF-producing command takes `--download DIR` to save PDFs alongside the printed output. Filenames are `<case_or_title>_<date>.pdf`, sanitised.
+
+### Examples
+
 ```bash
-# List all courts
-bharat-courts courts
-bharat-courts courts --type hc   # High Courts only
+# Print version, list available courts
+bharat-courts version
+bharat-courts courts --type hc
 
-# Search case status (requires CAPTCHA — uses ManualCaptchaSolver by default)
-bharat-courts search delhi --case-type 134 --case-number 1 --year 2024
+# HC Services — discover bench / case-type codes, then search
+bharat-courts hcservices benches delhi
+bharat-courts hcservices case-types delhi --bench 1
+bharat-courts hcservices search delhi --case-type 134 --case-number 1 --year 2024
+bharat-courts hcservices orders delhi --case-type 134 --case-number 1 --year 2024 --download ./orders/
+bharat-courts hcservices cause-list delhi --date 24-04-2026
 
-# Get cause list
-bharat-courts cause-list delhi
-bharat-courts cause-list delhi --date 01-03-2026
+# District Courts — drill down state -> district -> complex -> establishment
+bharat-courts districtcourts states
+bharat-courts districtcourts districts --state 8
+bharat-courts districtcourts complexes --state 8 --dist 1
+bharat-courts districtcourts case-types --state 8 --dist 1 --complex 1080010 --est 2
+bharat-courts districtcourts search \
+    --state 8 --dist 1 --complex 1080010 --est 2 \
+    --case-type "89^2" --case-number 100 --year 2024
+bharat-courts districtcourts cause-list \
+    --state 8 --dist 1 --complex 1080010 --est 2 \
+    --court-no "1@2"   # --court-name auto-resolves if blank
 
-# Get court orders
-bharat-courts orders delhi --case-type 134 --case-number 1 --year 2024
+# Calcutta HC (returns case_info + orders)
+bharat-courts calcuttahc search --case-type 12 --case-number 12886 --year 2024
 
-# Search judgments
-bharat-courts judgments delhi --from-date 01-01-2024 --to-date 31-01-2024
+# Judgments portal
+bharat-courts judgments search --text "right to privacy" --page-size 25
+bharat-courts judgments search-all --text "land acquisition" --max-pages 5 --download ./pdfs/
 
-# Supreme Court
-bharat-courts sci --year 2024 --month 6
+# Supreme Court — homepage feed
+bharat-courts sci recent --limit 10
+bharat-courts sci recent --limit 5 --download ./sci-pdfs/
 
-# Install AI agent skills (Claude Code, Copilot, etc.)
+# JSON output for piping to jq / spreadsheets
+bharat-courts --json courts --type sc | jq '.[].name'
+bharat-courts --json hcservices benches bombay
+
+# Install the AI agent skill bundle (Claude Code, Copilot, etc.)
 bharat-courts install-skills
 ```
 
@@ -1090,8 +1180,8 @@ Environment variables with `BHARAT_COURTS_` prefix:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BHARAT_COURTS_REQUEST_DELAY` | `1.0` | Seconds between requests |
-| `BHARAT_COURTS_TIMEOUT` | `30` | Request timeout (seconds) |
-| `BHARAT_COURTS_MAX_RETRIES` | `3` | Retry count on failure |
+| `BHARAT_COURTS_TIMEOUT` | `60` | Request timeout (seconds). Wide District Courts party-name searches genuinely take 30-60s on the portal — the previous default of 30 was too tight and triggered timeouts against endpoints that were about to respond. |
+| `BHARAT_COURTS_MAX_RETRIES` | `3` | Retry count on failure (only applied to 5xx and connect/read timeouts; 4xx responses propagate immediately). |
 | `BHARAT_COURTS_LOG_LEVEL` | `INFO` | Logging level |
 
 Or use a `.env` file. See [.env.example](.env.example).
@@ -1156,7 +1246,7 @@ source .venv/bin/activate   # Linux/macOS
 pip install -e ".[all]"
 
 # 4. Verify everything works
-pytest                                    # 112 unit tests, no network needed
+pytest                                    # 148 unit tests, no network needed
 ruff check . && ruff format --check .     # lint + format check
 ```
 
@@ -1234,9 +1324,10 @@ src/bharat_courts/
 
 ### Areas where help is needed
 
-- **Better CAPTCHA solving** — the ddddocr OCR is ~60% accurate; the ONNX solver is an alternative, but a fine-tuned model would help further
-- **District court enhancements** — more search types (filing number, FIR number, advocate, act), CLI commands
-- **Supreme Court client** — `SCIClient` is basic; the SCI website structure changes frequently
+- **Better CAPTCHA solving** — ddddocr is ~75% accurate on the judgments portal; the ONNX solver is an alternative, but a fine-tuned model would help further
+- **District court search reliability** — `case_status`, `court_orders`, and `cause_list` were rewired this cycle to send the right portal field names; broader coverage testing would surface remaining edge cases (and `case_status_by_party` still has no pagination)
+- **Supreme Court case search** — `SCIClient.search_by_year` / `search_by_party` are stubbed; the live `www.sci.gov.in` portal has a CAPTCHA-protected case-no/diary-no/party-name form that needs wiring up
+- **HC Services case history** — `case_status` doesn't return Pending/Disposed (or registration date / next hearing) because the SDK hits `showRecords` only; calling `o_civil_case_history.php` afterwards would fill in the rest
 - **More High Court coverage** — test the client against courts beyond Delhi/Bombay/Allahabad
 - **Documentation** — more examples, tutorials
 
