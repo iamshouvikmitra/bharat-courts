@@ -2,6 +2,7 @@
 
 from bharat_courts._version import __version__
 from bharat_courts.calcuttahc.client import CalcuttaHCClient
+from bharat_courts.captcha import CaptchaSolver, ManualCaptchaSolver, default_solver
 from bharat_courts.config import BharatCourtsConfig, config
 from bharat_courts.courts import (
     ALL_COURTS,
@@ -26,6 +27,7 @@ from bharat_courts.models import (
     JudgmentResult,
     SearchResult,
 )
+from bharat_courts.sci.client import SCIClient
 
 __all__ = [
     "__version__",
@@ -33,6 +35,7 @@ __all__ = [
     "BharatCourtsConfig",
     "CalcuttaHCClient",
     "CaptchaError",
+    "CaptchaSolver",
     "DistrictCourtClient",
     "CaseInfo",
     "CaseOrder",
@@ -41,6 +44,7 @@ __all__ = [
     "config",
     "Court",
     "CourtType",
+    "default_solver",
     "get_court",
     "get_court_by_name",
     "HCServicesClient",
@@ -48,7 +52,23 @@ __all__ = [
     "JudgmentSearchClient",
     "list_all_courts",
     "list_high_courts",
+    "ManualCaptchaSolver",
     "RateLimitedClient",
+    "SCIClient",
     "SearchResult",
     "SUPREME_COURT",
 ]
+
+try:
+    from bharat_courts.captcha.ocr import OCRCaptchaSolver  # noqa: F401
+
+    __all__ += ["OCRCaptchaSolver"]
+except ImportError:
+    pass
+
+try:
+    from bharat_courts.captcha.onnx import ONNXCaptchaSolver  # noqa: F401
+
+    __all__ += ["ONNXCaptchaSolver"]
+except ImportError:
+    pass

@@ -14,6 +14,13 @@ try:
 except ImportError:
     pass
 
+try:
+    from bharat_courts.captcha.ocr import OCRCaptchaSolver
+
+    __all__ += ["OCRCaptchaSolver"]
+except ImportError:
+    pass
+
 _logger = logging.getLogger(__name__)
 
 
