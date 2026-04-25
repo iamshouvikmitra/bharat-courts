@@ -202,16 +202,15 @@ def judgments(text: str, page: int, search_opt: str, court_type: str):
 
 
 @main.command()
-@click.option("--year", required=True, type=int, help="Year")
-@click.option("--month", default=None, type=int, help="Month (1-12)")
-def sci(year: int, month: int | None):
-    """Search Supreme Court judgments."""
+@click.option("--limit", default=50, type=int, help="Max items to print (the portal lists 50)")
+def sci(limit: int):
+    """List the most recent Supreme Court judgments (homepage feed)."""
 
     async def _sci():
         from bharat_courts.sci.client import SCIClient
 
         async with SCIClient() as client:
-            return await client.search_by_year(year, month)
+            return await client.list_recent_judgments(limit=limit)
 
     results = _run(_sci())
 
@@ -219,12 +218,14 @@ def sci(year: int, month: int | None):
         click.echo("No SC judgments found.")
         return
 
-    click.echo(f"Found {len(results)} SC judgments")
+    click.echo(f"Found {len(results)} recent SC judgments")
     for j in results:
         click.echo(f"\n{j.title}")
         if j.case_number:
             click.echo(f"  {j.case_number}")
         click.echo(f"  Date: {j.judgment_date}")
+        if j.source_id:
+            click.echo(f"  Diary: {j.source_id}")
         if j.pdf_url:
             click.echo(f"  PDF: {j.pdf_url}")
 

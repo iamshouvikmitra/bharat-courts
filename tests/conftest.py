@@ -40,6 +40,11 @@ def judgments_search_response():
 
 
 @pytest.fixture
+def sci_home_html():
+    return (FIXTURES_DIR / "sci_home.html").read_text()
+
+
+@pytest.fixture
 def districtcourts_case_status_html():
     return (FIXTURES_DIR / "districtcourts_case_status.html").read_text()
 

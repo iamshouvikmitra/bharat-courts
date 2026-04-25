@@ -1,10 +1,27 @@
-"""BS4 HTML parsers for Supreme Court of India website."""
+"""Parsers for the Supreme Court of India site (``www.sci.gov.in``).
+
+The homepage embeds the most recent judgments as plain anchors::
+
+    <a href="https://www.sci.gov.in/view-pdf/?diary_no=94392025&type=j
+            &order_date=2026-04-24&from=latest_judgements_order">
+      VINAY RAGHUNATH DESHMUKH VS. NATWARLAL SHAMJI GADA - C.A. No. 6677/2026
+      - Diary Number 9439 / 2025 - 24-Apr-2026
+      <div ...>(Uploaded On 24-04-2026 17:22:34)</div>
+    </a>
+
+We pull the diary number / order date / type from the query string and the
+parties / case number / decision date from the visible text. The viewer
+URL stays in ``source_url``; ``pdf_url`` carries the directly-downloadable
+``/sci-get-pdf/?...`` URL (same params).
+"""
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 from datetime import date, datetime
+from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -12,99 +29,113 @@ from bharat_courts.models import JudgmentResult
 
 logger = logging.getLogger(__name__)
 
+VIEW_PDF_PATH = "/view-pdf/"
+GET_PDF_PATH = "/sci-get-pdf/"
 
-def _parse_date(text: str, fmt: str = "%d-%m-%Y") -> date | None:
+
+def _clean(text: str | None) -> str:
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", html.unescape(text)).strip()
+
+
+def _parse_decision_date(text: str) -> date | None:
+    """Parse "24-Apr-2026" or "24-04-2026" into a date."""
     text = text.strip()
     if not text:
         return None
-    # Try multiple date formats used by SCI
-    for f in (fmt, "%d/%m/%Y", "%d.%m.%Y", "%Y-%m-%d"):
+    for fmt in ("%d-%b-%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y"):
         try:
-            return datetime.strptime(text, f).date()
+            return datetime.strptime(text, fmt).date()
         except ValueError:
             continue
-    logger.debug("Could not parse date: %s", text)
     return None
 
 
-def _clean_text(text: str | None) -> str:
-    if not text:
-        return ""
-    return re.sub(r"\s+", " ", text.strip())
+def _split_parties(text: str) -> tuple[str, str]:
+    """Split "PETITIONER VS. RESPONDENT" on a case-insensitive ``Vs.``."""
+    parts = re.split(r"\s+(?:Vs\.?|VS\.?|vs\.?)\s+", text, maxsplit=1)
+    if len(parts) == 2:
+        return parts[0].strip(), parts[1].strip()
+    return text.strip(), ""
 
 
-def _parse_judges(text: str) -> list[str]:
-    text = _clean_text(text)
-    text = re.sub(r"Hon'?ble\s+", "", text, flags=re.IGNORECASE)
-    parts = re.split(r",\s*|\s+and\s+", text, flags=re.IGNORECASE)
-    return [p.strip() for p in parts if p.strip()]
+def _build_pdf_url(view_url: str, base_url: str) -> str:
+    """Replace the ``/view-pdf/`` path with ``/sci-get-pdf/`` while
+    preserving the query string. The new URL is the iframe ``src`` the
+    portal viewer uses internally and is directly downloadable."""
+    if VIEW_PDF_PATH not in view_url:
+        return view_url
+    return view_url.replace(VIEW_PDF_PATH, GET_PDF_PATH, 1)
 
 
-def parse_judgment_list(
-    html: str, base_url: str = "https://main.sci.gov.in"
+def parse_recent_judgments(
+    html_text: str,
+    *,
+    base_url: str = "https://www.sci.gov.in",
 ) -> list[JudgmentResult]:
-    """Parse SCI judgment listing page.
+    """Parse the homepage of ``www.sci.gov.in`` into JudgmentResult objects.
 
-    The SCI website lists judgments in a table with columns for
-    date, case number, parties, judges, and PDF download link.
+    Returns judgments listed in the "Latest Judgements / Orders" tab.
+    Order dates / case numbers / parties / diary numbers are extracted
+    from each anchor's text and href.
     """
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html_text, "lxml")
     results: list[JudgmentResult] = []
 
-    # SCI uses various table structures; try to find judgment entries
-    # Look for tables with PDF links
-    tables = soup.find_all("table")
+    anchors = soup.select('a[href*="view-pdf/?diary_no="][href*="from=latest_judgements_order"]')
+    for a in anchors:
+        href = a.get("href", "")
+        if not href:
+            continue
 
-    for table in tables:
-        rows = table.find_all("tr")
-        for row in rows:
-            cols = row.find_all("td")
-            if len(cols) < 3:
-                continue
+        params = parse_qs(urlparse(href).query)
+        diary_no = (params.get("diary_no") or [""])[0]
+        url_type = (params.get("type") or [""])[0]
+        url_order_date = (params.get("order_date") or [""])[0]
 
-            # Look for PDF links in any column
-            pdf_link = row.find("a", href=re.compile(r"\.pdf", re.IGNORECASE))
-            if not pdf_link:
-                continue
+        # Pull the visible main label out of the anchor, ignoring the
+        # nested <div>(Uploaded On ...)</div> tail.
+        for div in a.find_all("div"):
+            div.extract()
+        label = _clean(a.get_text())
 
-            href = pdf_link["href"]
-            if href.startswith("/"):
-                pdf_url = base_url + href
-            elif not href.startswith("http"):
-                pdf_url = base_url + "/" + href
-            else:
-                pdf_url = href
+        # Label shape: "PARTIES - CASE_NO - Diary Number X / Y - DD-MMM-YYYY".
+        # Split on " - " but not on hyphens inside CASE_NO ("C.A. No.").
+        parts = [p.strip() for p in re.split(r"\s+-\s+", label) if p.strip()]
+        parties_part = parts[0] if parts else ""
+        case_number = parts[1] if len(parts) > 1 else ""
+        # The "Diary Number ... / ..." segment is parts[2]; we already have
+        # the canonical diary_no from the URL so we don't re-extract.
+        decision_date_text = parts[3] if len(parts) > 3 else url_order_date
 
-            # Extract available metadata from columns
-            texts = [_clean_text(col.get_text()) for col in cols]
+        petitioner, respondent = _split_parties(parties_part)
+        decision_date = _parse_decision_date(decision_date_text) or _parse_decision_date(
+            url_order_date
+        )
 
-            # Heuristic: find date-like and title-like columns
-            judgment_date = None
-            title = ""
-            case_number = ""
+        title = parties_part if parties_part else case_number or diary_no
 
-            for text in texts:
-                if not judgment_date:
-                    judgment_date = _parse_date(text)
-                elif not title:
-                    title = text
-                elif not case_number:
-                    case_number = text
+        view_url = href if href.startswith("http") else base_url + href
+        pdf_url = _build_pdf_url(view_url, base_url)
 
-            if not title:
-                title = _clean_text(pdf_link.get_text()) or pdf_url.split("/")[-1]
-
-            results.append(
-                JudgmentResult(
-                    title=title,
-                    court_name="Supreme Court of India",
-                    case_number=case_number,
-                    judgment_date=judgment_date,
-                    pdf_url=pdf_url,
-                    source_url=pdf_url,
-                    source_id=href,
-                )
+        results.append(
+            JudgmentResult(
+                title=title,
+                court_name="Supreme Court of India",
+                case_number=case_number,
+                judgment_date=decision_date,
+                pdf_url=pdf_url,
+                source_url=view_url,
+                source_id=diary_no,
+                metadata={
+                    "petitioner": petitioner,
+                    "respondent": respondent,
+                    "type": url_type,  # "j" = judgment, "o" = order
+                    "from": "latest_judgements_order",
+                },
             )
+        )
 
-    logger.info("Parsed %d SCI judgments", len(results))
+    logger.info("Parsed %d SCI recent judgments", len(results))
     return results
