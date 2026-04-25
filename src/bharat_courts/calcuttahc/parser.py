@@ -40,7 +40,8 @@ def parse_search_response(raw: str) -> dict:
     """Parse the JSON response from /order_judgment_search.
 
     Returns a dict with keys:
-        cino, full_case_num, cause_title, orders (list of order dicts)
+        cino, full_case_num, case_type_name, side, cause_title,
+        petitioner, respondent, orders (list of order dicts)
 
     Each order dict has: order_num, order_date, judge, order_type,
         neutral_citation, order_data (for show_pdf call)
@@ -49,10 +50,18 @@ def parse_search_response(raw: str) -> dict:
     if isinstance(data, str):
         data = json.loads(data)
 
+    raw_cause_title = data.get("cause_title", "")
+    cause_title_clean = _clean_html(raw_cause_title)
+    petitioner, respondent = _split_cause_title(raw_cause_title)
+
     result = {
         "cino": data.get("cino", ""),
         "full_case_num": data.get("full_Case_num", ""),
-        "cause_title": _clean_html(data.get("cause_title", "")),
+        "case_type_name": data.get("case_type_name", ""),
+        "side": data.get("side", ""),
+        "cause_title": cause_title_clean,
+        "petitioner": petitioner,
+        "respondent": respondent,
         "orders": [],
     }
 
@@ -62,6 +71,27 @@ def parse_search_response(raw: str) -> dict:
 
     result["orders"] = _parse_order_rows(html)
     return result
+
+
+def _split_cause_title(raw: str) -> tuple[str, str]:
+    """Extract petitioner and respondent from a cause-title HTML string.
+
+    The portal returns HTML like::
+
+        <b>SOURAV ROY BHOWMICK<br>-vs-<br>THE UNION OF INDIA AND ORS.
+
+    Strategy: strip HTML tags, then split on ``-vs-`` (case-insensitive,
+    surrounding whitespace allowed). If the split yields exactly two parts,
+    use them as (petitioner, respondent). Otherwise return the cleaned
+    string as petitioner and an empty respondent.
+    """
+    cleaned = _clean_html(raw)
+    if not cleaned:
+        return "", ""
+    parts = re.split(r"\s*-\s*vs\s*-\s*", cleaned, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) == 2:
+        return parts[0].strip(), parts[1].strip()
+    return cleaned, ""
 
 
 def _parse_order_rows(html: str) -> list[dict]:
@@ -108,14 +138,16 @@ def _parse_order_rows(html: str) -> list[dict]:
         if od_match:
             order_data = od_match.group(1)
 
-        orders.append({
-            "order_num": order_num,
-            "order_date": order_date,
-            "judge": judge,
-            "order_type": order_type,
-            "neutral_citation": neutral_citation,
-            "order_data": order_data,
-        })
+        orders.append(
+            {
+                "order_num": order_num,
+                "order_date": order_date,
+                "judge": judge,
+                "order_type": order_type,
+                "neutral_citation": neutral_citation,
+                "order_data": order_data,
+            }
+        )
 
     return orders
 

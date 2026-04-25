@@ -18,6 +18,8 @@ from __future__ import annotations
 import logging
 import re
 
+import httpx
+
 from bharat_courts.calcuttahc import endpoints
 from bharat_courts.calcuttahc.parser import parse_search_response, to_case_orders
 from bharat_courts.captcha import default_solver
@@ -25,7 +27,7 @@ from bharat_courts.captcha.base import CaptchaSolver
 from bharat_courts.config import BharatCourtsConfig
 from bharat_courts.config import config as default_config
 from bharat_courts.http import RateLimitedClient, create_legacy_ssl_context
-from bharat_courts.models import CaseOrder
+from bharat_courts.models import CaseInfo, CaseOrder
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +41,11 @@ class CalcuttaHCClient:
     Usage::
 
         async with CalcuttaHCClient() as client:
-            orders = await client.search_orders(
+            case_info, orders = await client.search_orders(
                 case_type="12", case_number="12886", year="2024",
             )
+            if case_info:
+                print(case_info.case_number, case_info.petitioner, "vs", case_info.respondent)
             for order in orders:
                 print(order.order_date, order.judge, order.neutral_citation)
                 if order.pdf_url:
@@ -60,9 +64,7 @@ class CalcuttaHCClient:
             self._http = http_client
             self._owns_http = False
         else:
-            self._http = RateLimitedClient(
-                self._config, ssl_context=create_legacy_ssl_context()
-            )
+            self._http = RateLimitedClient(self._config, ssl_context=create_legacy_ssl_context())
             self._owns_http = True
         self._csrf_token: str = ""
 
@@ -106,8 +108,8 @@ class CalcuttaHCClient:
         case_number: str,
         year: str,
         establishment: str = "appellate",
-        max_captcha_attempts: int = 3,
-    ) -> list[CaseOrder]:
+        max_captcha_attempts: int = 5,
+    ) -> tuple[CaseInfo | None, list[CaseOrder]]:
         """Search for orders/judgments by case number.
 
         Args:
@@ -116,10 +118,16 @@ class CalcuttaHCClient:
             year: Case year (e.g. "2024").
             establishment: Bench name — "appellate", "original",
                 "jalpaiguri", or "portblair".
-            max_captcha_attempts: Max CAPTCHA solve retries.
+            max_captcha_attempts: Max CAPTCHA solve retries. Default 5
+                (with OCR ~75% accuracy this gives ~0.1% all-fail rate;
+                each retry opens a fresh session, ~3-4s overhead).
 
         Returns:
-            List of CaseOrder objects with pdf_url and neutral_citation.
+            Tuple of ``(CaseInfo | None, list[CaseOrder])``. The
+            ``CaseInfo`` carries case-level metadata (CNR, parties,
+            full case number); the list carries per-order rows. If no
+            case matched and no metadata could be recovered, returns
+            ``(None, [])``.
         """
         est_code = endpoints.ESTABLISHMENTS.get(establishment.lower(), establishment)
 
@@ -140,18 +148,23 @@ class CalcuttaHCClient:
                 year=year,
                 captcha=captcha,
             )
-            resp = await self._http.post(
-                endpoints.SEARCH_URL,
-                data=form,
-                headers={
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Referer": endpoints.SEARCH_PAGE_URL,
-                },
-            )
-
-            if resp.status_code == 422:
-                logger.warning("CAPTCHA attempt %d failed (422)", attempt + 1)
-                continue
+            try:
+                resp = await self._http.post(
+                    endpoints.SEARCH_URL,
+                    data=form,
+                    headers={
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Referer": endpoints.SEARCH_PAGE_URL,
+                    },
+                )
+            except httpx.HTTPStatusError as e:
+                # Wrong CAPTCHA → the portal returns 422 with a Laravel
+                # validation body. Rotate session and retry. Other 4xx
+                # (real validation errors) propagate.
+                if e.response.status_code == 422:
+                    logger.warning("CAPTCHA attempt %d failed (422)", attempt + 1)
+                    continue
+                raise
 
             try:
                 search_data = parse_search_response(resp.text)
@@ -162,10 +175,14 @@ class CalcuttaHCClient:
 
         if search_data is None:
             logger.error("Failed to search after %d attempts", max_captcha_attempts)
-            return []
+            return None, []
+
+        case_info = _build_case_info(search_data)
 
         if not search_data["orders"]:
-            return []
+            if case_info is None:
+                return None, []
+            return case_info, []
 
         # Resolve PDF URLs for each order via /show_pdf
         pdf_urls: dict[str, str] = {}
@@ -174,9 +191,7 @@ class CalcuttaHCClient:
             if not order_data:
                 continue
             try:
-                pdf_form = endpoints.show_pdf_form(
-                    token=self._csrf_token, order_data=order_data
-                )
+                pdf_form = endpoints.show_pdf_form(token=self._csrf_token, order_data=order_data)
                 pdf_resp = await self._http.post(
                     endpoints.SHOW_PDF_URL,
                     data=pdf_form,
@@ -192,7 +207,7 @@ class CalcuttaHCClient:
             except Exception as e:
                 logger.warning("Failed to resolve PDF for order %s: %s", order_data, e)
 
-        return to_case_orders(search_data, pdf_urls)
+        return case_info, to_case_orders(search_data, pdf_urls)
 
     async def download_order_pdf(self, pdf_url: str) -> bytes:
         """Download an order/judgment PDF.
@@ -202,9 +217,47 @@ class CalcuttaHCClient:
 
         Returns:
             Raw PDF bytes.
+
+        Raises:
+            RuntimeError: if the response does not start with the
+                ``%PDF`` magic bytes (e.g. portal returned an error
+                string instead of a PDF).
         """
         resp = await self._http.get(
             pdf_url,
             headers={"Referer": endpoints.SEARCH_PAGE_URL},
         )
-        return resp.content
+        content = resp.content
+        if content[:4] != b"%PDF":
+            raise RuntimeError(
+                f"PDF download did not return a valid PDF "
+                f"(got {len(content)} bytes; head={content[:64]!r})"
+            )
+        return content
+
+
+def _build_case_info(search_data: dict) -> CaseInfo | None:
+    """Build a CaseInfo from parsed search response metadata.
+
+    Returns None if the response carries no usable case-level metadata
+    (no CNR and no full case number).
+    """
+    cino = search_data.get("cino", "")
+    full_case_num = search_data.get("full_case_num", "")
+    if not cino and not full_case_num:
+        return None
+
+    side = search_data.get("side", "").strip()
+    # The portal's `side` field already contains the court name, e.g.
+    # "Calcutta High Court - Appellate Side". Use it as-is when present;
+    # fall back to the bare court name otherwise.
+    court_name = side or "Calcutta High Court"
+
+    return CaseInfo(
+        case_number=full_case_num,
+        case_type=search_data.get("case_type_name", ""),
+        cnr_number=cino,
+        petitioner=search_data.get("petitioner", ""),
+        respondent=search_data.get("respondent", ""),
+        court_name=court_name,
+    )

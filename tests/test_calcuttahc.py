@@ -9,27 +9,26 @@ from bharat_courts.calcuttahc.parser import parse_search_response, to_case_order
 
 # --- Sample response from the portal (verified via live testing) ---
 
-SAMPLE_RESPONSE = json.dumps({
-    "cino": "WBCHCA0239512024",
-    "case_type_name": "WPA",
-    "reg_no": "12886",
-    "year": "2024",
-    "side": "Calcutta High Court - Appellate Side",
-    "full_Case_num": "WPA/12886/2024",
-    "cause_title": (
-        "<b>SOURAV ROY BHOWMICK<br>-vs-<br>"
-        "THE UNION OF INDIA AND ORS."
-    ),
-    "list": (
-        '<tr><td>1</td>'
-        "<td>10-05-2024</td>"
-        "<td>HON'BLE JUSTICE SABYASACHI BHATTACHARYYA</td>"
-        "<td>Order<br><small>Neutral Citation:</small><br>2024:CHC-AS:1277</td>"
-        '<td><button class="btn btn-sm btn-primary showorder" '
-        'onclick=\'show_order("1~201200128862024~1~WBCHCA0239512024~2024")\'>'
-        "View Order</button></td></tr>"
-    ),
-})
+SAMPLE_RESPONSE = json.dumps(
+    {
+        "cino": "WBCHCA0239512024",
+        "case_type_name": "WPA",
+        "reg_no": "12886",
+        "year": "2024",
+        "side": "Calcutta High Court - Appellate Side",
+        "full_Case_num": "WPA/12886/2024",
+        "cause_title": ("<b>SOURAV ROY BHOWMICK<br>-vs-<br>THE UNION OF INDIA AND ORS."),
+        "list": (
+            "<tr><td>1</td>"
+            "<td>10-05-2024</td>"
+            "<td>HON'BLE JUSTICE SABYASACHI BHATTACHARYYA</td>"
+            "<td>Order<br><small>Neutral Citation:</small><br>2024:CHC-AS:1277</td>"
+            '<td><button class="btn btn-sm btn-primary showorder" '
+            "onclick='show_order(\"1~201200128862024~1~WBCHCA0239512024~2024\")'>"
+            "View Order</button></td></tr>"
+        ),
+    }
+)
 
 
 # --- Endpoint tests ---
@@ -75,8 +74,12 @@ def test_parse_search_response():
     result = parse_search_response(SAMPLE_RESPONSE)
     assert result["cino"] == "WBCHCA0239512024"
     assert result["full_case_num"] == "WPA/12886/2024"
+    assert result["case_type_name"] == "WPA"
+    assert result["side"] == "Calcutta High Court - Appellate Side"
     assert "SOURAV ROY BHOWMICK" in result["cause_title"]
     assert "UNION OF INDIA" in result["cause_title"]
+    assert result["petitioner"] == "SOURAV ROY BHOWMICK"
+    assert result["respondent"] == "THE UNION OF INDIA AND ORS."
     assert len(result["orders"]) == 1
 
     order = result["orders"][0]
@@ -86,6 +89,28 @@ def test_parse_search_response():
     assert order["order_type"] == "Order"
     assert order["neutral_citation"] == "2024:CHC-AS:1277"
     assert order["order_data"] == "1~201200128862024~1~WBCHCA0239512024~2024"
+
+
+def test_parse_search_response_cause_title_no_split():
+    """Cause title without -vs- separator should populate petitioner only."""
+    data = json.dumps(
+        {
+            "cino": "X",
+            "full_Case_num": "Y",
+            "cause_title": "<b>SOLO PARTY NAME</b>",
+            "list": "",
+        }
+    )
+    result = parse_search_response(data)
+    assert result["petitioner"] == "SOLO PARTY NAME"
+    assert result["respondent"] == ""
+
+
+def test_parse_search_response_empty_cause_title():
+    data = json.dumps({"cino": "X", "full_Case_num": "Y", "cause_title": "", "list": ""})
+    result = parse_search_response(data)
+    assert result["petitioner"] == ""
+    assert result["respondent"] == ""
 
 
 def test_parse_search_response_double_encoded():
