@@ -161,40 +161,27 @@ def cause_list(court_code: str, causelist_date: str, criminal: bool):
 
 
 @main.command()
-@click.argument("court_code")
-@click.option("--from-date", default="", help="From date (DD-MM-YYYY)")
-@click.option("--to-date", default="", help="To date (DD-MM-YYYY)")
-@click.option("--judge", default="", help="Judge name")
-@click.option("--party", default="", help="Party name")
-@click.option("--text", "free_text", default="", help="Free text search")
+@click.option("--text", required=True, help="Search text (keywords/phrase)")
 @click.option("--page", default=1, help="Page number")
-def judgments(
-    court_code: str,
-    from_date: str,
-    to_date: str,
-    judge: str,
-    party: str,
-    free_text: str,
-    page: int,
-):
+@click.option(
+    "--search-opt",
+    type=click.Choice(["PHRASE", "ANY", "ALL"]),
+    default="PHRASE",
+    help="Phrase match mode",
+)
+@click.option("--court-type", default="2", help='"2" for High Courts, "3" for SCR')
+def judgments(text: str, page: int, search_opt: str, court_type: str):
     """Search judgments on the judgment portal."""
-    court = get_court(court_code)
-    if not court:
-        click.echo(f"Unknown court: {court_code}", err=True)
-        sys.exit(1)
 
     async def _judgments():
         from bharat_courts.judgments.client import JudgmentSearchClient
 
         async with JudgmentSearchClient() as client:
             return await client.search(
-                court,
-                from_date=from_date,
-                to_date=to_date,
-                judge_name=judge,
-                party_name=party,
-                free_text=free_text,
+                text,
                 page=page,
+                search_opt=search_opt,
+                court_type=court_type,
             )
 
     result = _run(_judgments())
