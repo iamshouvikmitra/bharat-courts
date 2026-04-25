@@ -290,6 +290,33 @@ class DistrictCourtClient:
         est_html = result.get("est_list", result.get("establishment_list", ""))
         return parse_option_tags(est_html)
 
+    async def list_cause_list_courts(
+        self,
+        state_code: str,
+        dist_code: str,
+        court_complex_code: str,
+        est_code: str = "",
+    ) -> dict[str, str]:
+        """Get the courts dropdown for cause-list lookup.
+
+        The cause-list form requires both ``court_no`` (the option's
+        value, e.g. ``"1@2"``) and ``court_name`` (the option's display
+        text, e.g. ``"District & Sessions Judge - DJ Div. Patna Sadar"``).
+        Use this method to discover them; pass either the code through
+        directly to :meth:`cause_list`, which will look up the matching
+        name automatically.
+        """
+        await self._init_session()
+        form = endpoints.fill_cause_list_form(
+            state_code=state_code,
+            dist_code=dist_code,
+            court_complex_code=court_complex_code,
+            est_code=est_code,
+        )
+        result = await self._post_ajax("cause_list/fillCauseList", form)
+        html = result.get("cause_list", "")
+        return parse_option_tags(html)
+
     async def list_case_types(
         self,
         state_code: str,
@@ -496,7 +523,8 @@ class DistrictCourtClient:
         dist_code: str,
         court_complex_code: str,
         est_code: str = "",
-        court_no: str = "",
+        court_no: str,
+        court_name: str = "",
         causelist_date: str = "",
         civil: bool = True,
     ) -> list[CauseListEntry]:
@@ -507,13 +535,31 @@ class DistrictCourtClient:
             dist_code: District code.
             court_complex_code: Court complex code.
             est_code: Establishment code (if needed).
-            court_no: Court number (optional, defaults to all).
+            court_no: Court code from :meth:`list_cause_list_courts`
+                (the option's ``value``).
+            court_name: Court display name (the option's text). The
+                portal validates against this — sending an empty
+                ``court_name_txt`` triggers ``"Court Name is required"``.
+                If left empty, this method calls
+                :meth:`list_cause_list_courts` once to look up the
+                matching name for ``court_no``.
             causelist_date: Date in DD-MM-YYYY format (defaults to today).
             civil: True for civil, False for criminal.
 
         Returns:
             List of CauseListEntry objects.
         """
+        if not court_name:
+            mapping = await self.list_cause_list_courts(
+                state_code, dist_code, court_complex_code, est_code
+            )
+            court_name = mapping.get(court_no, "")
+            if not court_name:
+                raise ValueError(
+                    f"court_no={court_no!r} not found in fillCauseList for "
+                    f"complex={court_complex_code} est={est_code}. "
+                    f"Available: {list(mapping)[:5]}{'...' if len(mapping) > 5 else ''}"
+                )
 
         def build_form(captcha: str) -> dict:
             return endpoints.cause_list_form(
@@ -522,6 +568,7 @@ class DistrictCourtClient:
                 court_complex_code=court_complex_code,
                 est_code=est_code,
                 court_no=court_no,
+                court_name=court_name,
                 causelist_date=causelist_date,
                 civil=civil,
                 captcha=captcha,

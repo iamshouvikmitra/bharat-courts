@@ -140,10 +140,18 @@ def case_status_by_number_form(
     year: str,
     captcha: str,
 ) -> dict[str, str]:
-    """Form data for case status search by case number."""
+    """Form data for case status search by case number.
+
+    The portal's ``submitCaseNo()`` JS does ``$('#search_case').serialize()``
+    (which includes ``search_case_no`` from the form) AND **also** appends
+    ``&case_no=<value>`` separately. The server validates against
+    ``case_no`` — sending only ``search_case_no`` makes it complain
+    ``Case Number is required..!``. We send both for parity.
+    """
     return {
         "case_type": case_type,
         "search_case_no": case_number,
+        "case_no": case_number,
         "rgyear": year,
         "case_captcha_code": captcha,
         "state_code": state_code,
@@ -194,12 +202,21 @@ def court_orders_by_number_form(
     captcha: str,
     order_type: str = "both",
 ) -> dict[str, str]:
-    """Form data for court orders search by case number."""
+    """Form data for court orders search by case number.
+
+    The portal's ``courtorder/submitCaseNo`` JS appends ``case_no``,
+    ``rgyear``, and ``radvalue`` *in addition* to the form-serialized
+    ``search_case_no``, ``rgyearCaseOrder``, and ``frad``. The server
+    reads the explicit appended fields. We send both names for parity.
+    """
     return {
         "case_type": case_type,
         "search_case_no": case_number,
+        "case_no": case_number,
         "rgyearCaseOrder": year,
+        "rgyear": year,
         "frad": order_type,
+        "radvalue": order_type,
         "order_case_captcha_code": captcha,
         "state_code": state_code,
         "dist_code": dist_code,
@@ -220,12 +237,23 @@ def cause_list_form(
     dist_code: str,
     court_complex_code: str,
     est_code: str = "",
-    court_no: str = "",
+    court_no: str,
+    court_name: str,
     causelist_date: str = "",
     civil: bool = True,
     captcha: str,
 ) -> dict[str, str]:
-    """Form data for cause list query."""
+    """Form data for cause list query.
+
+    The portal's ``submit_causelist()`` JS reads ``$("#CL_court_no
+    option:selected").text()`` (the selected court's display label) and
+    appends it as ``court_name_txt``. The server requires it — sending
+    an empty value triggers ``Court Name is required..!``. The caller
+    is responsible for passing both ``court_no`` (the option value /
+    code) and ``court_name`` (the option label).
+    :meth:`bharat_courts.districtcourts.client.DistrictCourtClient
+    .list_cause_list_courts` returns a code → name mapping.
+    """
     if not causelist_date:
         from datetime import date
 
@@ -247,11 +275,33 @@ def cause_list_form(
         "CL_court_no": court_no,
         "causelist_date": causelist_date,
         "cause_list_captcha_code": captcha,
-        "court_name_txt": "",
+        "court_name_txt": court_name,
         "state_code": state_code,
         "dist_code": dist_code,
         "court_complex_code": court_complex_code,
         "est_code": est_code,
         "cicri": "civ" if civil else "cri",
         "selprevdays": selprevdays,
+    }
+
+
+def fill_cause_list_form(
+    *,
+    state_code: str,
+    dist_code: str,
+    court_complex_code: str,
+    est_code: str = "",
+    search_act: str = "",
+) -> dict[str, str]:
+    """Form data for the ``cause_list/fillCauseList`` dropdown loader.
+
+    Returns the courts dropdown for a given complex/establishment as
+    HTML option fragments under the ``cause_list`` JSON field.
+    """
+    return {
+        "state_code": state_code,
+        "dist_code": dist_code,
+        "court_complex_code": court_complex_code,
+        "est_code": est_code,
+        "search_act": search_act,
     }

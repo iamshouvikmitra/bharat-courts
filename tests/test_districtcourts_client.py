@@ -269,3 +269,181 @@ async def test_list_states(fast_config, captcha_solver):
     assert "7" in states
     assert states["7"] == "Delhi"
     assert len(states) == 36
+
+
+# Regression tests for the field-name + court-name fixes (issue #3) ---------
+
+
+def test_case_status_form_sends_both_case_no_aliases():
+    """The portal's submitCaseNo() JS appends `case_no` *in addition* to
+    the form-serialized `search_case_no`. The server validates against
+    `case_no` — sending only `search_case_no` triggers a "Case Number is
+    required" error. Lock in that we send both."""
+    from bharat_courts.districtcourts.endpoints import case_status_by_number_form
+
+    form = case_status_by_number_form(
+        state_code="8",
+        dist_code="1",
+        court_complex_code="1080010",
+        est_code="2",
+        case_type="89^2",
+        case_number="42",
+        year="2024",
+        captcha="abc123",
+    )
+    assert form["search_case_no"] == "42"
+    assert form["case_no"] == "42"
+    assert form["case_captcha_code"] == "abc123"
+    assert form["rgyear"] == "2024"
+
+
+def test_court_orders_form_sends_aliases():
+    """courtorder/submitCaseNo JS appends `case_no`, `rgyear`, `radvalue`
+    in addition to the form's `search_case_no`, `rgyearCaseOrder`, `frad`."""
+    from bharat_courts.districtcourts.endpoints import court_orders_by_number_form
+
+    form = court_orders_by_number_form(
+        state_code="8",
+        dist_code="1",
+        court_complex_code="1080010",
+        est_code="2",
+        case_type="89^2",
+        case_number="42",
+        year="2024",
+        captcha="abc123",
+        order_type="both",
+    )
+    assert form["search_case_no"] == form["case_no"] == "42"
+    assert form["rgyearCaseOrder"] == form["rgyear"] == "2024"
+    assert form["frad"] == form["radvalue"] == "both"
+
+
+def test_cause_list_form_requires_non_empty_court_name():
+    """The portal's submit_causelist() JS appends `court_name_txt`=
+    selected option text. Server rejects empty `court_name_txt` with
+    "Court Name is required". The form builder now requires both
+    `court_no` and `court_name`."""
+    from bharat_courts.districtcourts.endpoints import cause_list_form
+
+    form = cause_list_form(
+        state_code="8",
+        dist_code="1",
+        court_complex_code="1080010",
+        est_code="2",
+        court_no="2^1",
+        court_name="District & Sessions Judge",
+        causelist_date="01-04-2026",
+        civil=True,
+        captcha="abc123",
+    )
+    assert form["CL_court_no"] == "2^1"
+    assert form["court_name_txt"] == "District & Sessions Judge"
+    assert form["cicri"] == "civ"
+
+    # Default-empty `court_name` must NOT be accepted by the public client
+    # method (it auto-resolves it via list_cause_list_courts), but the
+    # form-builder itself accepts whatever is passed; that's fine — the
+    # higher-level client guard is the policy gate.
+    with pytest.raises(TypeError):
+        # court_name is required as kwarg now (no default)
+        cause_list_form(
+            state_code="8",
+            dist_code="1",
+            court_complex_code="1080010",
+            est_code="2",
+            court_no="2^1",
+            causelist_date="01-04-2026",
+            civil=True,
+            captcha="abc123",
+        )
+
+
+@pytest.mark.asyncio
+async def test_list_cause_list_courts_parses_dropdown(fast_config, captcha_solver):
+    """list_cause_list_courts hits cause_list/fillCauseList and parses the
+    HTML option fragment in the `cause_list` JSON field."""
+    cause_list_html = (
+        '<option value="">Select court</option>'
+        '<option value="2^1">1-Sri Rupesh Deo-Principal District &amp; Sessions Judge</option>'
+        '<option value="2^2">2-Sri Sunil Dutta Pandey-Principal Judge</option>'
+    )
+
+    with respx.mock:
+        _mock_session_init()
+        respx.post(url__regex=rf"^{BASE_URL}/.*p=cause_list/fillCauseList").mock(
+            return_value=_ajax_response(cause_list=cause_list_html)
+        )
+
+        async with DistrictCourtClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            mapping = await client.list_cause_list_courts("8", "1", "1080010", "2")
+
+    assert mapping["2^1"].startswith("1-Sri Rupesh Deo")
+    assert mapping["2^2"].startswith("2-Sri Sunil Dutta Pandey")
+    assert "" not in mapping  # empty placeholder filtered
+
+
+@pytest.mark.asyncio
+async def test_cause_list_auto_resolves_court_name(fast_config, captcha_solver):
+    """When court_name is not given, cause_list calls list_cause_list_courts
+    once and looks up the matching name. Verify the captured submit body
+    carries the resolved name in court_name_txt."""
+    cause_list_html = (
+        '<option value="2^1">1-Sri Rupesh Deo-Principal District &amp; Sessions Judge</option>'
+    )
+    captured_body: dict = {}
+
+    def capture_submit(request):
+        captured_body["body"] = request.content.decode()
+        return _ajax_response(causelist_data="")
+
+    with respx.mock:
+        _mock_session_init()
+        respx.post(url__regex=rf"^{BASE_URL}/.*p=cause_list/fillCauseList").mock(
+            return_value=_ajax_response(cause_list=cause_list_html)
+        )
+        respx.post(url__regex=rf"^{BASE_URL}/.*p=cause_list/submitCauseList").mock(
+            side_effect=capture_submit
+        )
+        # set_data + non-fillCauseList AJAXs
+        respx.post(url__regex=rf"^{BASE_URL}/.*p=casestatus/set_data").mock(
+            return_value=_ajax_response()
+        )
+
+        async with DistrictCourtClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            await client.cause_list(
+                state_code="8",
+                dist_code="1",
+                court_complex_code="1080010",
+                est_code="2",
+                court_no="2^1",
+                causelist_date="01-04-2026",
+                civil=True,
+            )
+
+    assert "court_name_txt=" in captured_body["body"]
+    # BeautifulSoup would have unescaped &amp; → & before storing.
+    assert "Principal+District+%26+Sessions+Judge" in captured_body["body"]
+
+
+@pytest.mark.asyncio
+async def test_cause_list_raises_on_unknown_court_no(fast_config, captcha_solver):
+    """If court_no doesn't appear in the dropdown list, raise ValueError
+    rather than silently sending a blank court_name to the portal."""
+    cause_list_html = '<option value="2^1">A Real Court</option>'
+
+    with respx.mock:
+        _mock_session_init()
+        respx.post(url__regex=rf"^{BASE_URL}/.*p=cause_list/fillCauseList").mock(
+            return_value=_ajax_response(cause_list=cause_list_html)
+        )
+
+        async with DistrictCourtClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            with pytest.raises(ValueError, match="not found in fillCauseList"):
+                await client.cause_list(
+                    state_code="8",
+                    dist_code="1",
+                    court_complex_code="1080010",
+                    est_code="2",
+                    court_no="9^9",
+                    civil=True,
+                )
