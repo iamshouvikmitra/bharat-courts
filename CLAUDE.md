@@ -12,7 +12,7 @@ bharat-courts is an async Python SDK for accessing Indian court data from eCourt
 # Install (requires Python 3.11+, use python3.12 if system python is older)
 pip install -e ".[all]"
 
-# Run unit tests (69 tests, no network needed)
+# Run unit tests (117 tests, no network needed)
 pytest
 
 # Run single test
@@ -88,7 +88,7 @@ Delhi=26, Bombay=1, Allahabad=13, Calcutta=16, Gauhati=6, Telangana=29, AP=2, Ka
 
 ## Testing
 
-- **Unit tests** (`tests/`) — 69 tests, all offline. Parser tests use HTML/JSON fixtures in `tests/fixtures/`.
+- **Unit tests** (`tests/`) — 117 tests, all offline. Parser tests use HTML/JSON fixtures in `tests/fixtures/`.
 - **Live tests** (`examples/live_test_all.py`) — 8 integration tests against real portals. Requires ddddocr. ~60% CAPTCHA accuracy with auto-retry.
 - **Mocking** — `respx` for HTTP, custom `CaptchaSolver` subclass returning fixed strings.
 
