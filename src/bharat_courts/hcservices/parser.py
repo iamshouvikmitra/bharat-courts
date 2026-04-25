@@ -12,6 +12,7 @@ Both formats are handled here.
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import re
@@ -148,8 +149,8 @@ def parse_case_status(raw: str) -> list[CaseInfo]:
                 cnr_number=rec.get("cino") or "",
                 filing_number=rec.get("case_no") or "",
                 registration_number=case_no2,
-                petitioner=rec.get("pet_name") or "",
-                respondent=rec.get("res_name") or "",
+                petitioner=html.unescape(rec.get("pet_name") or ""),
+                respondent=html.unescape(rec.get("res_name") or ""),
             )
         )
 
