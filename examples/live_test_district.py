@@ -166,9 +166,7 @@ async def test_list_case_types():
 
             est_code = ests[0] if ests and needs_est else ""
 
-            case_types = await client.list_case_types(
-                "8", "1", complex_code, est_code
-            )
+            case_types = await client.list_case_types("8", "1", complex_code, est_code)
             t.details["case_type_count"] = len(case_types)
             t.details["sample"] = dict(list(case_types.items())[:5])
             assert len(case_types) > 0, "No case types found"
