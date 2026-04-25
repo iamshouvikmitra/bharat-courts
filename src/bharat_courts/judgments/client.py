@@ -271,14 +271,25 @@ class JudgmentSearchClient:
         path: str,
         *,
         court_type: str = "2",
+        val: str = "0",
+        citation_year: str = "",
     ) -> str:
         """Exchange a row's ``open_pdf`` path for a downloadable URL via
         ``?p=pdf_search/openpdfcaptcha``. The path's ``#page=...`` fragment
-        is stripped before sending — the controller returns 405 otherwise."""
+        is stripped before sending — the controller returns 405 otherwise.
+
+        ``val`` is the row index (``open_pdf(val, ...)`` from the row
+        HTML). The portal uses it as a session-scoped row key — sending
+        ``val="0"`` for every call makes it serve the first row's PDF
+        regardless of the path you pass. The caller MUST supply the
+        per-row val from ``judgment.metadata["pdf_val"]``.
+        """
         body = endpoints.open_pdf_captcha_form(
             path=path,
             app_token=self._app_token,
             court_type=court_type,
+            val=val,
+            citation_year=citation_year,
         )
         resp = await self._http.post(
             endpoints.OPEN_PDF_CAPTCHA_URL,
@@ -326,7 +337,19 @@ class JudgmentSearchClient:
         if judgment.pdf_url.startswith("http"):
             url = judgment.pdf_url
         else:
-            url = await self._resolve_pdf_url(judgment.pdf_url, court_type=court_type)
+            # `val` is the row's open_pdf(VAL, ...) index. The portal
+            # uses it as a session-scoped key when generating the temp
+            # outputfile; without it (or with the same val for every
+            # row) the portal serves the first row's PDF for every
+            # subsequent call.
+            val = (judgment.metadata or {}).get("pdf_val", "0")
+            citation_year = (judgment.metadata or {}).get("pdf_citation_year", "")
+            url = await self._resolve_pdf_url(
+                judgment.pdf_url,
+                court_type=court_type,
+                val=val,
+                citation_year=citation_year,
+            )
 
         content = await self._http.get_bytes(
             url,

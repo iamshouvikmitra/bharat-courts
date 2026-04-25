@@ -106,18 +106,23 @@ def _parse_row_html(blob: str) -> JudgmentResult | None:
     """Parse one ``aaData[i][1]`` HTML blob into a JudgmentResult."""
     soup = BeautifulSoup(blob, "lxml")
 
-    # Path from the open_pdf(...) onclick.
+    # Path + val + citation_year from the open_pdf(val, citation_year, path)
+    # onclick. The portal's openpdfcaptcha endpoint uses `val` as a row
+    # index key — sending val="0" for every row makes it serve the FIRST
+    # row's PDF for all subsequent calls. We must propagate the per-row
+    # val so the resolver returns the right outputfile.
     pdf_path = ""
+    pdf_val = ""
+    pdf_citation_year = ""
     for tag in soup.find_all(onclick=True):
         m = _OPEN_PDF_RE.search(tag.get("onclick", ""))
         if m:
-            pdf_path = m.group(3)
+            pdf_val, pdf_citation_year, pdf_path = m.group(1), m.group(2), m.group(3)
             break
     if not pdf_path:
-        # Fall back to scanning the raw blob in case the onclick is elsewhere.
         m = _OPEN_PDF_RE.search(blob)
         if m:
-            pdf_path = m.group(3)
+            pdf_val, pdf_citation_year, pdf_path = m.group(1), m.group(2), m.group(3)
 
     # The case label is the visible <button>/<font> text, e.g.
     # "CRMP/1144/2026 of AKASH TIWARI Vs STATE OF CHHATTISGARH".
@@ -156,6 +161,12 @@ def _parse_row_html(blob: str) -> JudgmentResult | None:
         bench_type = "Single Bench"
 
     title = f"{pet} v. {resp}".strip(" v.") if pet else case_label_text
+
+    # Stash val + citation_year alongside the path; client.download_pdf()
+    # forwards them to openpdfcaptcha. Without the right `val`, the portal
+    # returns the same PDF for every row in the same session.
+    metadata["pdf_val"] = pdf_val
+    metadata["pdf_citation_year"] = pdf_citation_year
 
     return JudgmentResult(
         title=title,

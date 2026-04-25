@@ -77,6 +77,21 @@ def test_parse_search_response_missing_reportrow():
     assert sr.items == []
 
 
+def test_parse_search_response_extracts_pdf_val(judgments_search_response):
+    """Regression: each row's open_pdf(val, citation_year, path) onclick
+    must yield a per-row `pdf_val` in metadata. The portal uses `val`
+    as a session-scoped row key when resolving openpdfcaptcha — sending
+    the same val for every row makes it serve the first row's PDF for
+    every subsequent download in the session."""
+    sr = parse_search_response(judgments_search_response, page=1, page_size=10)
+
+    # Fixture row 1 has open_pdf('0', '', '...'), row 2 has open_pdf('1', '', '...').
+    assert sr.items[0].metadata["pdf_val"] == "0"
+    assert sr.items[1].metadata["pdf_val"] == "1"
+    # Both pdf_vals are distinct — that's the property the bug violated.
+    assert sr.items[0].metadata["pdf_val"] != sr.items[1].metadata["pdf_val"]
+
+
 def test_parse_search_response_pagination():
     payload = {
         "reportrow": {
