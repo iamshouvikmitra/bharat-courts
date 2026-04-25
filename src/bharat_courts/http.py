@@ -91,7 +91,28 @@ class RateLimitedClient:
                 resp = await client.request(method, url, **kwargs)
                 resp.raise_for_status()
                 return resp
-            except (httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadTimeout) as e:
+            except httpx.HTTPStatusError as e:
+                # 4xx is a permanent client error (bad request, wrong captcha,
+                # missing field, not found, etc.) — retrying makes no sense and
+                # only burns the retry budget on the same wrong state. Only 5xx
+                # responses are treated as transient.
+                if e.response.status_code < 500:
+                    raise
+                last_error = e
+                if attempt == self._config.max_retries - 1:
+                    raise
+                wait = (attempt + 1) * 2
+                logger.warning(
+                    "Retry %d/%d for %s %s: %s. Waiting %ds.",
+                    attempt + 1,
+                    self._config.max_retries,
+                    method,
+                    url,
+                    e,
+                    wait,
+                )
+                await asyncio.sleep(wait)
+            except (httpx.ConnectError, httpx.ReadTimeout) as e:
                 last_error = e
                 if attempt == self._config.max_retries - 1:
                     raise

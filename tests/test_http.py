@@ -84,6 +84,51 @@ async def test_max_retries_exceeded(fast_config):
 
 
 @pytest.mark.asyncio
+async def test_no_retry_on_4xx(fast_config):
+    """4xx responses are permanent client errors and must NOT be retried."""
+    import httpx
+
+    with respx.mock:
+        route = respx.get("https://example.com/notfound").mock(return_value=Response(404))
+
+        async with RateLimitedClient(fast_config) as client:
+            with pytest.raises(httpx.HTTPStatusError):
+                await client.get("https://example.com/notfound")
+
+        # Exactly one call — no retry on 4xx.
+        assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_no_retry_on_422(fast_config):
+    """422 (e.g. Calcutta HC wrong-captcha) is a 4xx and must not be retried."""
+    import httpx
+
+    with respx.mock:
+        route = respx.post("https://example.com/search").mock(return_value=Response(422))
+
+        async with RateLimitedClient(fast_config) as client:
+            with pytest.raises(httpx.HTTPStatusError):
+                await client.post("https://example.com/search", data={"k": "v"})
+
+        assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_still_works_on_5xx(fast_config):
+    """5xx responses are still retried (transient)."""
+    with respx.mock:
+        route = respx.get("https://example.com/transient")
+        route.side_effect = [Response(503), Response(200, text="ok")]
+
+        async with RateLimitedClient(fast_config) as client:
+            resp = await client.get("https://example.com/transient")
+            assert resp.text == "ok"
+
+        assert route.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_context_manager(fast_config):
     client = RateLimitedClient(fast_config)
     async with client:
