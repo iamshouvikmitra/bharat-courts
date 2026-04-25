@@ -90,7 +90,7 @@ class HCServicesClient:
         )
         return await self._captcha_solver.solve(resp.content)
 
-    async def _post_with_captcha_retry(self, url: str, form_builder, *, max_retries: int = 3):
+    async def _post_with_captcha_retry(self, url: str, form_builder, *, max_retries: int = 5):
         """POST with automatic CAPTCHA retry on CaptchaError.
 
         Each retry creates a brand-new session so the Securimage backend

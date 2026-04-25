@@ -149,7 +149,7 @@ class JudgmentSearchClient:
         logger.warning("CAPTCHA failed: %s", data.get("errormsg", "Unknown"))
         return False
 
-    async def _authenticate(self, search_text: str, *, max_captcha_attempts: int = 3) -> str | None:
+    async def _authenticate(self, search_text: str, *, max_captcha_attempts: int = 5) -> str | None:
         """Establish session and solve CAPTCHA. Returns captcha text or None.
 
         Each attempt creates a fresh session so the Securimage backend
@@ -176,7 +176,7 @@ class JudgmentSearchClient:
         page: int = 1,
         search_opt: str = "PHRASE",
         court_type: str = "2",
-        max_captcha_attempts: int = 3,
+        max_captcha_attempts: int = 5,
     ) -> SearchResult:
         """Search for judgments by keyword.
 
@@ -220,7 +220,7 @@ class JudgmentSearchClient:
         *,
         search_opt: str = "PHRASE",
         court_type: str = "2",
-        max_captcha_attempts: int = 3,
+        max_captcha_attempts: int = 5,
     ) -> AsyncIterator[SearchResult]:
         """Iterate through all pages of search results.
 

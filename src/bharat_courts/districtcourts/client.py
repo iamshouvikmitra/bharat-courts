@@ -163,7 +163,7 @@ class DistrictCourtClient:
         dist_code: str,
         court_complex_code: str,
         est_code: str = "",
-        max_retries: int = 3,
+        max_retries: int = 5,
     ) -> dict:
         """POST with automatic CAPTCHA retry.
 
