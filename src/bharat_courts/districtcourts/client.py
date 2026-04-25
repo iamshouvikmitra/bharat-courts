@@ -306,7 +306,11 @@ class DistrictCourtClient:
             est_code: Establishment code (if needed).
 
         Returns:
-            Dict mapping case type code to name.
+            Dict mapping case type code to name. Codes are returned in the
+            portal's compound ``"<case_type>^<est_code>"`` format (e.g.
+            ``"89^2": "ADMINISTRATIVE SUITE"``). Pass the full compound
+            string back as ``case_type`` to :meth:`case_status` /
+            :meth:`court_orders`; do not strip the suffix.
         """
         await self._init_session()
         await self._setup_court(
