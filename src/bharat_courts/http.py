@@ -43,6 +43,7 @@ class RateLimitedClient:
         self._config = config or default_config
         self._ssl_context = ssl_context
         self._client: httpx.AsyncClient | None = None
+        self._last_request_at: float = 0.0
 
     def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -83,7 +84,15 @@ class RateLimitedClient:
     async def _request(self, method: str, url: str, **kwargs) -> httpx.Response:
         """Execute request with rate limiting and exponential backoff retry."""
         client = self._ensure_client()
-        await asyncio.sleep(self._config.request_delay)
+
+        # Rate-limit: only sleep if the gap since the last request is shorter
+        # than request_delay. The first request pays no pre-delay.
+        loop = asyncio.get_event_loop()
+        now = loop.time()
+        gap = now - self._last_request_at
+        if self._last_request_at and gap < self._config.request_delay:
+            await asyncio.sleep(self._config.request_delay - gap)
+        self._last_request_at = loop.time()
 
         last_error: Exception | None = None
         for attempt in range(self._config.max_retries):
