@@ -1,0 +1,21 @@
+{
+  "reportrow": {
+    "sEcho": 1,
+    "iTotalRecords": 54122,
+    "iTotalDisplayRecords": 54122,
+    "sSearch": "",
+    "aaData": [
+      [
+        1,
+        "<button type='button' role='link' class='btn btn-link p-0 text-start' id='link_0' aria-label=\"CRMP/1144/2026 of AKASH TIWARI Vs STATE OF CHHATTISGARH pdf\" class='noToken' href='#' onclick=javascript:open_pdf('0','','court/cnrorders/cghccisdb/orders/CGHC010160032026_1_2026-04-23.pdf#page=&search=%20'); ><font size='3'>CRMP/1144/2026 of AKASH TIWARI Vs STATE OF CHHATTISGARH</button></font><br><strong>Judge : HON'BLE THE CHIEF JUSTICE,HON'BLE SHRI JUSTICE RAVINDRA KUMAR AGRAWAL</strong><br>excerpt section 498A of I.P.C.<br><strong class='caseDetailsTD' ><span style='color:#212F3D'> CNR :</span><font color='green'> CGHC010160032026</font><span style='color:#212F3D' > | Date of registration :</span><font color='green'> 21-04-2026</font><span style='color:#212F3D' > | Decision Date :</span><font color='green'> 22-04-2026</font><span style='color:#212F3D' > | Disposal Nature :</span><font color='green'> ALLOWED</font><br><span style='opacity: 0.5;'>Court : High Court Of Chhattisgarh</span></strong>"
+      ],
+      [
+        2,
+        "<button type='button' onclick=javascript:open_pdf('1','','court/cnrorders/dlhcdb/orders/DLHC010012342024_1_2024-02-15.pdf'); ><font size='3'>WP(C)/1234/2024 of ABC INDUSTRIES Vs UNION OF INDIA</button></font><br><strong>Judge : HON'BLE MR JUSTICE A,HON'BLE MS JUSTICE B</strong><br><strong class='caseDetailsTD' ><span> CNR :</span><font color='green'> DLHC010012342024</font><span> | Decision Date :</span><font color='green'> 15-02-2024</font><br><span>Court : Delhi High Court</span></strong>"
+      ]
+    ]
+  },
+  "total": "54,122",
+  "seconds": "0.123",
+  "app_token": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+}

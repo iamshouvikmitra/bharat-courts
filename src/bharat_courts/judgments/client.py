@@ -1,17 +1,27 @@
 """Judgment search portal client.
 
-Provides async access to judgments.ecourts.gov.in for searching
-High Court judgments by keyword with CAPTCHA solving.
+Provides async access to ``judgments.ecourts.gov.in`` for searching
+High Court / Supreme Court judgments by keyword.
 
 Flow:
-1. Load main page (establishes session cookies)
-2. Fetch + solve CAPTCHA
-3. Validate CAPTCHA via AJAX
-4. Load search results page with validated session
+
+1. GET ``/`` — establishes session cookies.
+2. GET the CAPTCHA image; solve it with the configured solver.
+3. POST ``?p=pdf_search/checkCaptcha`` — validates the CAPTCHA, returns
+   an ``app_token`` we must echo back on every subsequent call.
+4. POST ``?p=pdf_search/home`` — DataTables AJAX. Returns JSON with a
+   ``reportrow.aaData`` list of ``[serial, html_blob]`` rows plus a
+   rotated ``app_token``.
+5. (Per result) POST ``?p=pdf_search/openpdfcaptcha`` with the row's
+   ``path`` to obtain a per-session ``outputfile`` URL, then GET that
+   URL for the actual PDF bytes.
+
+The session token rotates on every call; we track it on the instance.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import AsyncIterator
 
@@ -19,42 +29,28 @@ from bharat_courts.captcha import default_solver
 from bharat_courts.captcha.base import CaptchaSolver
 from bharat_courts.config import BharatCourtsConfig
 from bharat_courts.config import config as default_config
+from bharat_courts.hcservices.parser import CaptchaError
 from bharat_courts.http import RateLimitedClient
 from bharat_courts.judgments import endpoints
-from bharat_courts.judgments.parser import parse_judgment_search
+from bharat_courts.judgments.parser import parse_search_response
 from bharat_courts.models import JudgmentResult, SearchResult
 
 logger = logging.getLogger(__name__)
 
-# Known bad PDF sizes from the judgment portal:
-# 0 bytes = empty response, 315 bytes = error page served as PDF
-_BAD_PDF_SIZES = frozenset({0, 315})
 _PDF_MAGIC = b"%PDF"
 
 
-def _validate_pdf_bytes(content: bytes) -> bytes | None:
-    """Validate that downloaded content is a real PDF.
-
-    Returns the content if valid, None otherwise.
-    """
-    if len(content) in _BAD_PDF_SIZES:
-        logger.warning("Invalid PDF: got %d bytes (known bad size)", len(content))
-        return None
-    if not content.startswith(_PDF_MAGIC):
-        logger.warning("Invalid PDF: missing %%PDF magic bytes (got %r)", content[:8])
-        return None
-    return content
-
-
 class JudgmentSearchClient:
-    """Async client for Judgment Search portal (judgments.ecourts.gov.in).
+    """Async client for the Judgment Search portal (``judgments.ecourts.gov.in``).
 
     Usage::
 
         async with JudgmentSearchClient() as client:
-            results = await client.search("constitution")
-            for judgment in results.items:
-                print(judgment.title, judgment.judgment_date)
+            sr = await client.search("section 498A")
+            print(sr.total_count, len(sr.items))
+            for j in sr.items:
+                print(j.case_number, j.court_name, j.judgment_date)
+                pdf = await client.download_pdf(j)  # populates j.pdf_bytes
     """
 
     def __init__(
@@ -68,7 +64,6 @@ class JudgmentSearchClient:
         self._http = http_client or RateLimitedClient(self._config)
         self._owns_http = http_client is None
         self._app_token: str = ""
-        self._download_count: int = 0
 
     async def __aenter__(self):
         await self._http.__aenter__()
@@ -78,53 +73,32 @@ class JudgmentSearchClient:
         if self._owns_http:
             await self._http.__aexit__(*args)
 
+    # -- session / CAPTCHA ----------------------------------------------------
+
     def _update_token_from_response(self, data: dict) -> None:
-        """Extract and store the rotating app_token from an API response."""
         token = data.get("app_token", "")
         if token:
             self._app_token = token
 
-    def _is_session_expired(self, data: dict) -> bool:
-        """Check if the session has expired and needs a full refresh."""
-        if data.get("session_expire") == "Y":
-            return True
-        msg = data.get("errormsg", "")
-        if msg and "session" in msg.lower():
-            return True
-        return False
-
-    async def _init_session(self):
-        """Load the main page to establish session cookies."""
+    async def _init_session(self) -> None:
         await self._http.get(endpoints.MAIN_PAGE_URL)
 
     async def _solve_captcha(self) -> str:
-        """Fetch and solve a CAPTCHA from the portal."""
         resp = await self._http.get(endpoints.CAPTCHA_IMAGE_URL)
         return await self._captcha_solver.solve(resp.content)
 
     async def _validate_captcha(self, captcha: str, search_text: str) -> bool:
-        """Validate the CAPTCHA via the portal's AJAX endpoint.
-
-        Returns True if valid, False otherwise. Sets self._app_token on success.
-        """
-        form_body = endpoints.check_captcha_form(
-            captcha=captcha,
-            search_text=search_text,
-        )
+        body = endpoints.check_captcha_form(captcha=captcha, search_text=search_text)
         resp = await self._http.post(
             endpoints.CHECK_CAPTCHA_URL,
-            content=form_body,
+            content=body,
             headers={
                 "Content-Type": "application/x-www-form-urlencoded",
                 "X-Requested-With": "XMLHttpRequest",
             },
         )
 
-        # Portal length-error responses are shaped:
-        #   "Captcha should be less than 6 characters..!<br/>#####<32-128 hex token>"
-        # The hex part is a rotated app_token we should preserve so the next
-        # attempt's request can present a valid token. Without this branch the
-        # `resp.json()` below would raise, we'd log "non-JSON", and lose the token.
+        # Length-error envelope: "<msg><br/>#####<hex token>"
         text = resp.text
         if "#####" in text:
             parts = text.split("#####", 1)
@@ -138,24 +112,16 @@ class JudgmentSearchClient:
         try:
             data = resp.json()
         except Exception:
-            logger.error("CAPTCHA check returned non-JSON: %s", resp.text[:200])
+            logger.error("CAPTCHA check returned non-JSON: %s", text[:200])
             return False
 
         self._update_token_from_response(data)
-
         if data.get("captcha_status") == "Y":
             return True
-
         logger.warning("CAPTCHA failed: %s", data.get("errormsg", "Unknown"))
         return False
 
     async def _authenticate(self, search_text: str, *, max_captcha_attempts: int = 5) -> str | None:
-        """Establish session and solve CAPTCHA. Returns captcha text or None.
-
-        Each attempt creates a fresh session so the Securimage backend
-        generates a new CAPTCHA challenge (within a single session the
-        challenge is pinned and retries are useless).
-        """
         for attempt in range(max_captcha_attempts):
             if attempt > 0:
                 logger.info("CAPTCHA retry %d/%d — new session", attempt + 1, max_captcha_attempts)
@@ -169,177 +135,227 @@ class JudgmentSearchClient:
         logger.error("Failed to solve CAPTCHA after %d attempts", max_captcha_attempts)
         return None
 
+    # -- search ---------------------------------------------------------------
+
+    async def _post_search(
+        self,
+        *,
+        search_text: str,
+        captcha_text: str,
+        search_opt: str,
+        court_type: str,
+        page: int,
+        page_size: int,
+    ) -> dict:
+        body = endpoints.search_results_form(
+            search_text=search_text,
+            captcha=captcha_text,
+            app_token=self._app_token,
+            search_opt=search_opt,
+            court_type=court_type,
+            page=page,
+            page_size=page_size,
+        )
+        resp = await self._http.post(
+            endpoints.SEARCH_RESULTS_URL,
+            content=body,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        )
+        # Portal occasionally prefixes the JSON with whitespace / blank lines.
+        text = resp.text.lstrip()
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as e:
+            logger.error("Search response was not JSON: %s", text[:200])
+            raise RuntimeError("Search response was not JSON") from e
+        self._update_token_from_response(data)
+        return data
+
     async def search(
         self,
         search_text: str,
         *,
         page: int = 1,
+        page_size: int = 10,
         search_opt: str = "PHRASE",
         court_type: str = "2",
         max_captcha_attempts: int = 5,
     ) -> SearchResult:
         """Search for judgments by keyword.
 
-        The portal requires solving a CAPTCHA before each search.
-        The captcha_solver configured on this client will be invoked.
-
         Args:
-            search_text: Keywords to search for.
-            page: Page number (1-indexed).
-            search_opt: "PHRASE" (exact), "ANY" (any word), "ALL" (all words).
-            court_type: "2" for High Courts, "3" for SCR.
+            search_text: Keywords / phrase to search for.
+            page: 1-indexed page number.
+            page_size: Rows per page (portal supports 10/25/50/100/1000).
+            search_opt: ``"PHRASE"``, ``"ANY"``, or ``"ALL"``.
+            court_type: ``"2"`` for High Courts, ``"3"`` for SCR.
             max_captcha_attempts: Max CAPTCHA solve retries before giving up.
 
         Returns:
-            SearchResult with list of JudgmentResult items.
+            ``SearchResult`` of :class:`JudgmentResult` items.
+
+        Raises:
+            CaptchaError: if the CAPTCHA solver couldn't produce a valid
+                solution within ``max_captcha_attempts`` tries. Empty
+                results are now distinguishable from "we gave up": empty
+                means the portal returned zero rows.
         """
         captcha_text = await self._authenticate(
             search_text, max_captcha_attempts=max_captcha_attempts
         )
         if captcha_text is None:
-            return SearchResult()
+            raise CaptchaError(f"Failed to solve CAPTCHA after {max_captcha_attempts} attempts")
 
-        params = endpoints.search_results_params(
+        data = await self._post_search(
             search_text=search_text,
-            captcha=captcha_text,
+            captcha_text=captcha_text,
             search_opt=search_opt,
             court_type=court_type,
-            app_token=self._app_token,
-            pagenum=page,
-        )
-        resp = await self._http.get(endpoints.SEARCH_RESULTS_URL, params=params)
-        return parse_judgment_search(
-            resp.text,
-            base_url=endpoints.BASE_URL,
             page=page,
+            page_size=page_size,
         )
+        return parse_search_response(data, page=page, page_size=page_size)
 
     async def search_all(
         self,
         search_text: str,
         *,
+        page_size: int = 25,
         search_opt: str = "PHRASE",
         court_type: str = "2",
         max_captcha_attempts: int = 5,
     ) -> AsyncIterator[SearchResult]:
-        """Iterate through all pages of search results.
-
-        Yields one SearchResult per page, automatically handling
-        pagination and token rotation between pages.
-        Re-authenticates on session expiry.
-
-        Args:
-            search_text: Keywords to search for.
-            search_opt: "PHRASE" (exact), "ANY" (any word), "ALL" (all words).
-            court_type: "2" for High Courts, "3" for SCR.
-            max_captcha_attempts: Max CAPTCHA solve retries before giving up.
-        """
+        """Iterate through every page of results, yielding one SearchResult
+        per page. Re-authenticates if the session token expires mid-walk."""
         captcha_text = await self._authenticate(
             search_text, max_captcha_attempts=max_captcha_attempts
         )
         if captcha_text is None:
-            return
+            raise CaptchaError(f"Failed to solve CAPTCHA after {max_captcha_attempts} attempts")
 
         page = 1
         while True:
-            params = endpoints.search_results_params(
-                search_text=search_text,
-                captcha=captcha_text,
-                search_opt=search_opt,
-                court_type=court_type,
-                app_token=self._app_token,
-                pagenum=page,
-            )
-            resp = await self._http.get(endpoints.SEARCH_RESULTS_URL, params=params)
-
-            # Check for JSON session expiry response
             try:
-                data = resp.json()
-                self._update_token_from_response(data)
-                if self._is_session_expired(data):
-                    logger.info("Session expired at page %d, re-authenticating", page)
-                    captcha_text = await self._authenticate(
-                        search_text, max_captcha_attempts=max_captcha_attempts
-                    )
-                    if captcha_text is None:
-                        return
-                    continue
-            except Exception:
-                pass  # Not JSON — it's HTML results, continue parsing
+                data = await self._post_search(
+                    search_text=search_text,
+                    captcha_text=captcha_text,
+                    search_opt=search_opt,
+                    court_type=court_type,
+                    page=page,
+                    page_size=page_size,
+                )
+            except RuntimeError:
+                logger.info("Session likely expired at page %d, re-auth", page)
+                captcha_text = await self._authenticate(
+                    search_text, max_captcha_attempts=max_captcha_attempts
+                )
+                if captcha_text is None:
+                    raise CaptchaError(
+                        f"Failed to solve CAPTCHA after {max_captcha_attempts} attempts"
+                    ) from None
+                continue
 
-            result = parse_judgment_search(
-                resp.text,
-                base_url=endpoints.BASE_URL,
-                page=page,
-            )
+            result = parse_search_response(data, page=page, page_size=page_size)
             yield result
-
             if not result.has_next or not result.items:
                 break
             page += 1
 
-    async def download_pdf(self, judgment: JudgmentResult) -> JudgmentResult:
+    # -- PDF download ---------------------------------------------------------
+
+    async def _resolve_pdf_url(
+        self,
+        path: str,
+        *,
+        court_type: str = "2",
+    ) -> str:
+        """Exchange a row's ``open_pdf`` path for a downloadable URL via
+        ``?p=pdf_search/openpdfcaptcha``. The path's ``#page=...`` fragment
+        is stripped before sending — the controller returns 405 otherwise."""
+        body = endpoints.open_pdf_captcha_form(
+            path=path,
+            app_token=self._app_token,
+            court_type=court_type,
+        )
+        resp = await self._http.post(
+            endpoints.OPEN_PDF_CAPTCHA_URL,
+            content=body,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        )
+        text = resp.text.lstrip()
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"openpdfcaptcha returned non-JSON: {text[:200]!r}") from e
+        self._update_token_from_response(data)
+        outputfile = data.get("outputfile") or ""
+        if not outputfile:
+            msg = data.get("message") or "no outputfile in response"
+            raise RuntimeError(f"openpdfcaptcha did not return a PDF URL: {msg}")
+        if outputfile.startswith("http"):
+            return outputfile
+        return f"{endpoints.SITE_ROOT}{outputfile}"
+
+    async def download_pdf(
+        self,
+        judgment: JudgmentResult,
+        *,
+        court_type: str = "2",
+    ) -> JudgmentResult:
         """Download the PDF for a judgment result.
 
-        Modifies the judgment in-place, setting pdf_bytes only if
-        the downloaded content is a valid PDF.
+        Mutates ``judgment`` in-place: sets ``pdf_bytes`` if the download
+        succeeds. The ``judgment.pdf_url`` slot stores the row's relative
+        ``path`` (from ``open_pdf(...)``), not a directly-fetchable URL —
+        we resolve it through the portal's ``openpdfcaptcha`` endpoint
+        before downloading.
+
+        Raises:
+            RuntimeError: if the download didn't return PDF bytes.
         """
         if not judgment.pdf_url:
-            logger.warning("No PDF URL for judgment: %s", judgment.title)
-            return judgment
+            raise RuntimeError(f"No PDF path on judgment: {judgment.title!r}")
 
-        content = await self._http.get_bytes(judgment.pdf_url)
-        validated = _validate_pdf_bytes(content)
-        if validated is None:
-            logger.warning("Skipping invalid PDF for: %s", judgment.title)
+        # If pdf_url already looks resolved (full https URL), trust it.
+        if judgment.pdf_url.startswith("http"):
+            url = judgment.pdf_url
         else:
-            judgment.pdf_bytes = validated
-            self._download_count += 1
+            url = await self._resolve_pdf_url(judgment.pdf_url, court_type=court_type)
+
+        content = await self._http.get_bytes(
+            url,
+            headers={"Referer": endpoints.MAIN_PAGE_URL},
+        )
+        if content[:4] != _PDF_MAGIC:
+            raise RuntimeError(
+                f"PDF download did not return a valid PDF "
+                f"(got {len(content)} bytes; head={content[:64]!r})"
+            )
+        judgment.pdf_bytes = content
         return judgment
-
-    async def _reset_session_for_downloads(self) -> bool:
-        """Reset the session to avoid per-download CAPTCHAs.
-
-        After 25 PDF downloads, the portal starts requiring a CAPTCHA
-        per download. Resetting the session avoids this.
-
-        Returns True if reset succeeded, False otherwise.
-        """
-        self._download_count = 0
-        return await self._authenticate("") is not None
 
     async def download_pdfs(
         self,
         judgments: list[JudgmentResult],
         *,
-        batch_size: int = 25,
+        court_type: str = "2",
+        stop_on_error: bool = False,
     ) -> list[JudgmentResult]:
-        """Download PDFs for multiple judgments in batches.
-
-        Resets the session every ``batch_size`` downloads to avoid
-        per-download CAPTCHAs. Skips judgments that already have pdf_bytes.
-
-        Args:
-            judgments: List of JudgmentResult to download PDFs for.
-            batch_size: Number of downloads before resetting session (default 25).
-
-        Returns:
-            The same list of judgments, with pdf_bytes populated where successful.
-        """
-        pending = [j for j in judgments if j.pdf_url and j.pdf_bytes is None]
-        if not pending:
-            return judgments
-
-        for i, judgment in enumerate(pending):
-            # Reset session at batch boundaries
-            if self._download_count > 0 and self._download_count % batch_size == 0:
-                logger.info("Reached %d downloads, resetting session", self._download_count)
-                if not await self._reset_session_for_downloads():
-                    logger.error("Session reset failed, stopping downloads")
-                    break
-
-            await self.download_pdf(judgment)
-            if judgment.pdf_bytes:
-                logger.debug("Downloaded %d/%d: %s", i + 1, len(pending), judgment.title)
-
+        """Download PDFs for multiple judgments. Skips ones that already
+        have ``pdf_bytes`` set. Errors are logged unless ``stop_on_error``."""
+        for j in judgments:
+            if j.pdf_bytes is not None or not j.pdf_url:
+                continue
+            try:
+                await self.download_pdf(j, court_type=court_type)
+            except Exception as e:
+                logger.warning("PDF download failed for %r: %s", j.case_number or j.title, e)
+                if stop_on_error:
+                    raise
         return judgments

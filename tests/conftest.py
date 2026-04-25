@@ -33,8 +33,10 @@ def hcservices_case_status_json():
 
 
 @pytest.fixture
-def judgments_search_html():
-    return (FIXTURES_DIR / "judgments_search.html").read_text()
+def judgments_search_response():
+    import json
+
+    return json.loads((FIXTURES_DIR / "judgments_search_response.json").read_text())
 
 
 @pytest.fixture
