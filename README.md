@@ -14,6 +14,7 @@ India's eCourts platform holds millions of case records across 25+ High Courts, 
 
 **bharat-courts** fixes that. It gives you — and your AI assistant — direct programmatic access to:
 
+- **Find any judgment with one call** — `Judgments().find(judge=..., year=..., text=..., cnr=...)` routes to the right backend (archive vs live) and returns a uniform result. The SDK does the heavy lifting; you describe the data, not where it lives.
 - **Track matters** — search by case number, party name, or advocate across any High Court or District Court
 - **Download orders & judgments** — get PDFs for all orders in a case with one call
 - **Monitor cause lists** — see which cases are listed before which bench, every day
@@ -51,6 +52,47 @@ pip install bharat-courts[all]
 **Requires Python 3.11+**
 
 ## Quick Start
+
+### Find a judgment without picking a backend
+
+The `Judgments` facade is the recommended entry point for "find a judgment matching some criteria" — it owns both the archive and live clients, picks the right one per query, and returns a uniform `Judgment` list. Use this unless you specifically need a portal-only feature (cause list, live case status, district-court drill-down).
+
+```python
+import asyncio
+from bharat_courts import Judgments
+
+async def main():
+    async with Judgments() as j:
+        # Structured filters → archive (no CAPTCHA, partition-pruned)
+        for r in await j.find(judge="chandrachud", year=(2018, 2024), court="sci", limit=10):
+            print(f"{r.decision_date}  {r.case_id}  {r.title}")
+
+        # Free-text → live (only the live portal does full-text)
+        for r in await j.find(text="right to privacy", limit=5):
+            print(f"{r.decision_date}  {r.title}  [{r.source}]")
+
+        # CNR alone — prefix routes to the right bucket, no full scan
+        result = await j.find(cnr="DLHC010230802020")
+        pdf = await j.fetch_pdf(result[0])
+        with open("judgment.pdf", "wb") as f:
+            f.write(pdf)
+
+        # Force a specific backend if you need to
+        archive_only = await j.find(text="bail", source="archive", limit=5)
+
+asyncio.run(main())
+```
+
+Routing rules (see API reference for details):
+
+| Filter shape | Backend |
+|---|---|
+| `cnr=` | archive (prefix → court → partition) |
+| `text=` only | live (only it does full-text body search) |
+| structured only (judge/party/year/court/citation) | archive |
+| `text=` + structured | archive — `text` folds into a title-substring match |
+
+Each returned `Judgment` carries a `source` field (`"archive"` or `"live"`) so consumers can still tell where it came from when that matters.
 
 ### Find all pending matters for your client
 
@@ -270,6 +312,7 @@ Note: `status`, `registration_date`, `judges`, and `next_hearing_date` are not r
 
 | Source | Client | Status |
 |--------|--------|--------|
+| **Federated (archive + live)** | **`Judgments`** | **Recommended entry point — one `find()` call routes to archive vs live by query shape** |
 | [HC Services](https://hcservices.ecourts.gov.in) | `HCServicesClient` | Fully working |
 | [District Courts](https://services.ecourts.gov.in) | `DistrictCourtClient` | Case status, orders, cause lists across 700+ courts |
 | [Judgment Search](https://judgments.ecourts.gov.in) | `JudgmentSearchClient` | Search, pagination, bulk PDF download |
@@ -279,6 +322,69 @@ Note: `status`, `registration_date`, `judges`, and `next_hearing_date` are not r
 | [HC Archive](https://registry.opendata.aws/indian-high-court-judgments/) (S3, CC-BY-4.0) | `ArchiveClient` | Same as above; routed via the unified `ArchiveClient` |
 
 ## API Reference
+
+### `Judgments` (federated facade)
+
+The recommended entry point for finding judgments. Owns an `ArchiveClient` and a `JudgmentSearchClient` internally (lazy-initialised), picks the right backend per query, and returns a uniform `list[Judgment]`. Reach for the portal-specific clients only when you need something the facade doesn't expose (cause lists, case status, district-court drill-down).
+
+```python
+from bharat_courts import Judgments
+
+async with Judgments() as j:
+    ...
+```
+
+No new install extra — pulls in whatever backends are available. For best behaviour install both:
+
+```bash
+pip install 'bharat-courts[archive,ocr]'
+```
+
+---
+
+#### `find(*, text=None, court=None, year=None, judge=None, party=None, citation=None, cnr=None, source="auto", limit=50) -> list[Judgment]`
+
+Run a search, routing transparently between the archive and the live portal.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `text` | `str \| None` | Free-text keyword search. Routes to live (only the live judgments portal does full-body search). |
+| `court` | `Court \| str \| None` | Court object or code (`"sci"`, `"delhi"`). |
+| `year` | `int \| tuple[int, int] \| None` | Single year or inclusive range. Drives archive partition pruning — strongly recommended for non-CNR queries. |
+| `judge` | `str \| None` | Substring on the judge field (archive). |
+| `party` | `str \| None` | Substring on petitioner/respondent (SCI) or title (HC). |
+| `citation` | `str \| None` | Citation substring (archive, SCI only). |
+| `cnr` | `str \| None` | Exact CNR match. Auto-routes via the 4-letter prefix when `source="auto"`. |
+| `source` | `"auto" \| "archive" \| "live"` | Override the automatic routing. |
+| `limit` | `int` | Total results to return (default 50). |
+
+**Returns:** `list[Judgment]` with `source` set to `"archive"` or `"live"` per item.
+
+**Routing (in `source="auto"` mode):**
+
+| filter shape | backend |
+|---|---|
+| `cnr=` set | archive (prefix-routed; no scan) |
+| `text=` set, no structured filters | live |
+| structured filters only (court/year/judge/party/citation) | archive |
+| `text=` + structured filters | archive — `text` folds into a title-substring match (party slot) |
+| nothing | raises `ValueError` |
+
+The decision is logged at INFO level (`logging.getLogger("bharat_courts.facade")`).
+
+---
+
+#### `fetch_pdf(judgment_or_cnr, *, language="english") -> bytes`
+
+Convenience wrapper that delegates to `ArchiveClient.fetch_pdf`. Accepts a `Judgment` instance or a CNR string. Raises `NotImplementedError` if you pass a `Judgment` with `source="live"` — the live download path needs the original `JudgmentResult` (for session continuity), so call `JudgmentSearchClient.download_pdf(judgment_result, court_type)` directly for that case.
+
+---
+
+#### `live_to_judgment(jr: JudgmentResult) -> Judgment`
+
+Public helper if you're doing routing yourself: normalises a `JudgmentResult` (returned by `JudgmentSearchClient.search`) into the unified `Judgment` shape. Maps `source_id → cnr`, resolves `court_name` via the registry, pulls `disposal_nature` / `registration_date` out of `metadata`.
+
+---
 
 ### `HCServicesClient`
 
@@ -1269,6 +1375,7 @@ The CLI is organised into one command group per portal, matching the SDK module 
 ```
 bharat-courts version
 bharat-courts courts [--type all|hc|sc]
+bharat-courts find             [--text | --judge | --party | --citation | --cnr | --court | --year | --source]
 bharat-courts hcservices       benches | case-types | search | search-by-party | orders | cause-list
 bharat-courts districtcourts   states | districts | complexes | establishments | case-types | courts | search | search-by-party | orders | cause-list
 bharat-courts calcuttahc       search
@@ -1277,6 +1384,8 @@ bharat-courts sci              recent
 bharat-courts archive          query | get | download | count | cache
 bharat-courts install-skills
 ```
+
+The top-level `find` command is the federated entry point: it routes between archive and live based on which filters you pass. Use it as the default for "find a judgment"; reach for the portal-specific groups when you need a portal-only feature.
 
 Global flags (apply to every subcommand):
 
@@ -1294,6 +1403,14 @@ Every PDF-producing command takes `--download DIR` to save PDFs alongside the pr
 # Print version, list available courts
 bharat-courts version
 bharat-courts courts --type hc
+
+# Federated find — routes between archive and live for you
+bharat-courts find --judge "chandrachud" --year 2022 --court sci --limit 5
+bharat-courts find --cnr DLHC010230802020              # auto-routed via CNR prefix
+bharat-courts find --text "right to privacy" --limit 5  # → live (full-text)
+bharat-courts find --text "asian hotels" --court delhi --year 2020  # mixed → archive
+bharat-courts find --party "tata motors" --year 2020 --source archive  # force backend
+bharat-courts --json find --judge "bobde" --year 2020 --court sci  # JSON output
 
 # HC Services — discover bench / case-type codes, then search
 bharat-courts hcservices benches delhi
@@ -1416,7 +1533,7 @@ source .venv/bin/activate   # Linux/macOS
 pip install -e ".[all]"
 
 # 4. Verify everything works
-pytest                                    # 148 unit tests, no network needed
+pytest                                    # 250 unit tests, no network needed
 ruff check . && ruff format --check .     # lint + format check
 ```
 
@@ -1496,6 +1613,7 @@ src/bharat_courts/
 │   ├── metadata_cache.py# Local mirror of parquet shards (TTL-invalidated)
 │   ├── schema.py        # Row → Judgment mapping (handles SCI + HC schemas)
 │   └── storage.py       # PDF cache (per-tar SCI, per-file HC) + LRU eviction
+├── facade.py            # Judgments — federated find()/fetch_pdf, routes archive vs live
 └── cli.py               # Click CLI entry point
 ```
 

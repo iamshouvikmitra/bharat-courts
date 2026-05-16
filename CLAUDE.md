@@ -4,10 +4,11 @@ Instructions for AI agents working on this codebase.
 
 ## Project Overview
 
-bharat-courts is an async Python SDK for accessing Indian court data. Two complementary surfaces:
+bharat-courts is an async Python SDK for accessing Indian court data. Two complementary backends + one federated facade:
 
 1. **Live clients** (`hcservices`, `districtcourts`, `calcuttahc`, `judgments`, `sci`) — scrape the official eCourts portals. CAPTCHA-gated, rate-limited, can answer "current case status / cause list / orders in progress". This is the original SDK.
 2. **Archive client** (`archive`, opt-in via `[archive]` extra) — DuckDB queries against the public AWS Open Data buckets (SCI 1950→present + 25 HCs, CC-BY-4.0). No CAPTCHA, no rate limits, but lags by 2–3 months. Used for historical research and bulk PDF retrieval.
+3. **`Judgments` facade** (`facade.py`) — single entry point that owns both backends, picks the right one per query (CNR → archive; text → live; structured → archive; mixed → archive with title fallback), and returns a uniform `Judgment` list. This is the recommended default for "find a judgment matching X".
 
 Coverage: 25+ High Courts, 700+ District Courts, the Supreme Court, plus the archive.
 
@@ -17,7 +18,7 @@ Coverage: 25+ High Courts, 700+ District Courts, the Supreme Court, plus the arc
 # Install (requires Python 3.11+, use python3.12 if system python is older)
 pip install -e ".[all]"
 
-# Run unit tests (226 tests, no network needed)
+# Run unit tests (250 tests, no network needed)
 pytest
 
 # Run single test
@@ -50,7 +51,8 @@ python examples/live_test_all.py
 - **`judgments/`** — Live client for judgments.ecourts.gov.in.
 - **`sci/`** — Live client for www.sci.gov.in (homepage feed only; case-no search not yet wired).
 - **`archive/`** — Opt-in (`[archive]` extra). DuckDB over AWS Open Data parquet shards + per-tar / per-PDF caching. See "Archive module" below.
-- **`cli.py`** — Click CLI entry point. Command groups mirror SDK module names.
+- **`facade.py`** — `Judgments` class, the federated find/fetch_pdf entry point. Owns lazy-initialised `ArchiveClient` + `JudgmentSearchClient`, routes by query shape. See "Federated facade" below.
+- **`cli.py`** — Click CLI entry point. Command groups mirror SDK module names; the top-level `find` command is the CLI equivalent of `Judgments.find`.
 
 ### HC Services portal protocol
 
@@ -108,7 +110,33 @@ status, hearings, in-progress orders).
 
 ### CNR-prefix routing (used by the archive, useful elsewhere)
 
-`infer_court_from_cnr(cnr)` returns a resolved `Court` from a CNR's 4-letter prefix. Verified against all 25 HC partitions + SCI in 2020. Use it before falling back to multi-source scans — `ArchiveClient.search(cnr=X)` already applies it automatically. Could be wired into the live `JudgmentSearchClient` too (not done yet).
+`infer_court_from_cnr(cnr)` returns a resolved `Court` from a CNR's 4-letter prefix. Verified against all 25 HC partitions + SCI in 2020. Use it before falling back to multi-source scans — `ArchiveClient.search(cnr=X)` already applies it automatically, and the `Judgments` facade also routes via this for CNR-only queries. Could be wired into the live `JudgmentSearchClient` too (not done yet).
+
+### Federated facade (`facade.py`)
+
+`Judgments` is the public-facing federated entry point. The class owns lazy-initialised `ArchiveClient` and `JudgmentSearchClient` (so users only pay for what they import — install just `[archive]` or just `[ocr]` and the facade gracefully uses whichever side is available).
+
+Routing table (consulted by `_resolve_source(source, text, cnr, structured) -> "archive" | "live"`):
+
+| `source` | `cnr` | `text` | structured | → backend |
+|---|---|---|---|---|
+| `auto` | set | any | any | archive |
+| `auto` | — | set | no | live |
+| `auto` | — | — | yes | archive |
+| `auto` | — | set | yes | archive (text → `party=` for title match) |
+| `auto` | — | — | — | raises `ValueError` |
+| `archive` / `live` | any | any | any | forced |
+
+Each decision is logged at INFO under `bharat_courts.facade` so it's debuggable in production.
+
+**`live_to_judgment(jr: JudgmentResult) -> Judgment`** is a public helper for callers doing routing themselves. Key mappings: `jr.source_id → cnr` (the live portal uses CNR as its row id), `jr.court_name → court` via `get_court_by_name`, `jr.metadata["disposal_nature" / "registration_date"]` → top-level fields.
+
+**Gotchas worth keeping in mind**:
+
+1. **`JudgmentSearchClient` has `__aexit__` but no `aclose()`**. The facade keeps the live client alive across `find()` calls by manually invoking `__aenter__`, then `__aexit__(None, None, None)` on facade close. Don't replace with `client.aclose()` — it doesn't exist.
+2. **Live PDF fetch via the facade raises `NotImplementedError`**. The live download path needs the original `JudgmentResult` (CAPTCHA-validated session state, `pdf_val`, `pdf_citation_year`). Calling `download_pdf` with just a `Judgment` would silently get the wrong PDF (see audit §0.4 / live portal `val` indexing). Document the workaround: use `JudgmentSearchClient.download_pdf` directly. Don't try to "fix" this by stashing JudgmentResult into Judgment — that would couple the unified model to one backend.
+3. **Mixed text + structured uses archive**, not live. The archive can only title-match for text (no full-body search), but it's still faster than live. Document this limitation. Don't try to fall back to live silently — users won't understand why a "text=" query suddenly takes 30s and burns a CAPTCHA.
+4. **`source=` is on the call site, not the constructor**. Per-call overrides are explicit and obvious; a constructor-level `default_source` would be subtler and surprising.
 
 ## Key Patterns
 
@@ -126,9 +154,9 @@ Delhi=26, Bombay=1, Allahabad=13, Calcutta=16, Gauhati=6, Telangana=29, AP=2, Ka
 
 ## Testing
 
-- **Unit tests** (`tests/`) — 226 tests, all offline. Parser tests use HTML/JSON fixtures in `tests/fixtures/`. Archive tests use synthetic in-memory tars + `respx`-mocked HTTP.
+- **Unit tests** (`tests/`) — 250 tests, all offline. Parser tests use HTML/JSON fixtures in `tests/fixtures/`. Archive tests use synthetic in-memory tars + `respx`-mocked HTTP. Facade tests use `AsyncMock` to stub the backends so we exercise the routing decision matrix without touching either S3 or the live portal.
 - **Live tests** (`examples/live_test_all.py`) — 8 integration tests against real portals. Requires ddddocr. ~60% CAPTCHA accuracy with auto-retry. Archive integration verifies anonymously against both S3 buckets — no separate live-test script yet.
-- **Mocking** — `respx` for HTTP (works with httpx natively), custom `CaptchaSolver` subclass returning fixed strings for live-client tests, `AsyncMock` + `unittest.mock.patch.object` for the archive query/cache layer.
+- **Mocking** — `respx` for HTTP (works with httpx natively), custom `CaptchaSolver` subclass returning fixed strings for live-client tests, `AsyncMock` + `unittest.mock.patch.object` for the archive query/cache layer and the facade routing.
 - **respx caveat**: doesn't support `host__icontains` matchers — use `url__regex` instead.
 
 ## Ruff Config
