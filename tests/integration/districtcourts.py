@@ -7,7 +7,7 @@ a well-populated state with active district courts.
 Usage:
     cd bharat-courts
     source .venv/bin/activate
-    python examples/live_test_district.py
+    python tests/integration/districtcourts.py
 
 Tests:
   1. List states (offline)

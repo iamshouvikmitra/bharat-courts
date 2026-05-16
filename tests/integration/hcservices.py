@@ -7,7 +7,7 @@ Each test creates a fresh session to avoid CAPTCHA session pinning issues.
 Usage:
     cd bharat-courts
     source .venv/bin/activate
-    python examples/live_test_all.py
+    python tests/integration/hcservices.py
 
 Tests:
   1. Court registry (offline)

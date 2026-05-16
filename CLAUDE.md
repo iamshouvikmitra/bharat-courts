@@ -32,8 +32,12 @@ ruff format --check .
 ruff check --fix .
 ruff format .
 
-# Live integration tests (requires network + ddddocr)
-python examples/live_test_all.py
+# Live integration tests — standalone scripts under tests/integration/.
+# Not collected by pytest; invoke directly. See tests/integration/README.md.
+python tests/integration/hcservices.py    # HC Services portal + CAPTCHA
+python tests/integration/archive.py       # archive + facade vs real S3
+python tests/integration/districtcourts.py
+python tests/integration/calcuttahc_wpa_12886.py
 ```
 
 ## Architecture
@@ -155,7 +159,7 @@ Delhi=26, Bombay=1, Allahabad=13, Calcutta=16, Gauhati=6, Telangana=29, AP=2, Ka
 ## Testing
 
 - **Unit tests** (`tests/`) — 250 tests, all offline. Parser tests use HTML/JSON fixtures in `tests/fixtures/`. Archive tests use synthetic in-memory tars + `respx`-mocked HTTP. Facade tests use `AsyncMock` to stub the backends so we exercise the routing decision matrix without touching either S3 or the live portal.
-- **Live tests** (`examples/live_test_all.py`) — 8 integration tests against real portals. Requires ddddocr. ~60% CAPTCHA accuracy with auto-retry. Archive integration verifies anonymously against both S3 buckets — no separate live-test script yet.
+- **Live integration tests** (`tests/integration/`) — standalone scripts (not pytest-collected; default `python_files=test_*.py` doesn't match these). One per backend: `hcservices.py`, `districtcourts.py`, `archive.py` (covers archive + facade), `calcuttahc_wpa_12886.py` (regression for a known-good case). Each prints PASS/FAIL and exits non-zero on failure — suitable for pre-release validation. See `tests/integration/README.md`.
 - **Mocking** — `respx` for HTTP (works with httpx natively), custom `CaptchaSolver` subclass returning fixed strings for live-client tests, `AsyncMock` + `unittest.mock.patch.object` for the archive query/cache layer and the facade routing.
 - **respx caveat**: doesn't support `host__icontains` matchers — use `url__regex` instead.
 

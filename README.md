@@ -1553,7 +1553,9 @@ pytest tests/test_hcservices_parser.py::test_parse_case_status_json
 pytest -v
 
 # Live integration tests against real eCourts portals (requires ddddocr + network)
-python examples/live_test_all.py
+python tests/integration/hcservices.py    # live HC Services + CAPTCHA solver
+python tests/integration/archive.py       # archive + facade against real S3
+# see tests/integration/README.md for the full list
 ```
 
 ### Code style
