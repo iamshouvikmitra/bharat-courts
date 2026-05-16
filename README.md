@@ -18,6 +18,7 @@ India's eCourts platform holds millions of case records across 25+ High Courts, 
 - **Download orders & judgments** — get PDFs for all orders in a case with one call
 - **Monitor cause lists** — see which cases are listed before which bench, every day
 - **Pull recent Supreme Court judgments** — scrape the homepage's "Latest Judgements / Orders" feed and download the PDFs
+- **Query the historical archive** — instant offline search across SCI judgments from 1950 and 25-HC judgments (CC-BY-4.0 AWS Open Data, no CAPTCHA, no rate limits)
 - **Access District Courts** — dynamically discover courts across 36 states/UTs and search 700+ court complexes
 - **Bulk download judgments** — paginate through results, batch-download PDFs with automatic session management
 - **Automate CAPTCHA handling** — built-in OCR solver, ONNX solver, or plug in your own
@@ -40,7 +41,10 @@ pip install bharat-courts[onnx]
 # With CLI
 pip install bharat-courts[cli]
 
-# Everything (OCR + ONNX + CLI + dev tools)
+# With historical-archive support (DuckDB over AWS Open Data buckets)
+pip install bharat-courts[archive]
+
+# Everything (OCR + ONNX + CLI + archive + dev tools)
 pip install bharat-courts[all]
 ```
 
@@ -171,6 +175,44 @@ async with SCIClient() as client:
 
 (Date-range / party-name search against the legacy `main.sci.gov.in` host is no longer functional — that host is permanently 503 and the live `www.sci.gov.in` portal gates those flows behind a CAPTCHA-protected case-no/diary-no form that the SDK does not yet wire up. `search_by_year` and `search_by_party` raise `NotImplementedError`.)
 
+### Query the historical archive (no CAPTCHA, no rate limits)
+
+For research workloads — "find every judgment by Justice X", "all 2020 Delhi HC writ
+petitions", bulk PDF retrieval — use the `ArchiveClient`, which reads the public
+[AWS Open Data buckets](https://registry.opendata.aws/indian-supreme-court-judgments/)
+maintained by Dattam Labs: SCI judgments from 1950 onwards and 25 High Courts.
+
+```python
+from bharat_courts import ArchiveClient
+
+async with ArchiveClient() as client:
+    # Substring match on judge, year range, partition-pruned in DuckDB.
+    results = await client.search(
+        court="sci", judge="chandrachud", year=(2018, 2024), limit=20,
+    )
+    for j in results:
+        print(f"{j.decision_date}  {j.case_id}  {j.title}")
+        print(f"  {j.citation}  outcome: {j.disposal_nature}")
+
+    # Stream every Delhi 2020 judgment (~18k) without holding them all in memory.
+    async for j in client.iter_judgments(court="delhi", year=2020, batch_size=500):
+        process(j)
+
+    # Fetch the PDF — CNR alone is enough; the SDK infers the source.
+    pdf_bytes = await client.fetch_pdf("DLHC010230802020")
+    # SCI judgments default to English; pass language="hindi" / "tamil" / etc.
+    sci_pdf = await client.fetch_pdf("ESCR010000301950", language="english")
+```
+
+Notes:
+- **Freshness gap**: the buckets update bi-monthly (SCI) and quarterly (HC). For
+  judgments delivered in the last 2–3 months, fall back to `JudgmentSearchClient`.
+- **Cache**: PDFs and parquet shards cache under `~/.cache/bharat-courts/archive/`.
+  Default cap is 5 GiB (`BHARAT_COURTS_ARCHIVE_CACHE_MAX_GB`); metadata TTL is
+  30 days (`BHARAT_COURTS_ARCHIVE_METADATA_TTL_DAYS`).
+- **License**: data is CC-BY-4.0 — attribute Dattam Labs / the eCourts platform
+  when redistributing.
+
 ### Use with AI agents (Claude Code, Copilot, etc.)
 
 Install the bundled skill so your AI assistant can look up court data for you in natural language:
@@ -226,13 +268,15 @@ Note: `status`, `registration_date`, `judges`, and `next_hearing_date` are not r
 
 ## Supported Portals
 
-| Portal | Client | Status |
+| Source | Client | Status |
 |--------|--------|--------|
 | [HC Services](https://hcservices.ecourts.gov.in) | `HCServicesClient` | Fully working |
 | [District Courts](https://services.ecourts.gov.in) | `DistrictCourtClient` | Case status, orders, cause lists across 700+ courts |
 | [Judgment Search](https://judgments.ecourts.gov.in) | `JudgmentSearchClient` | Search, pagination, bulk PDF download |
 | [Supreme Court](https://www.sci.gov.in) | `SCIClient` | Recent judgments feed + PDF download (case-no search not yet implemented) |
 | [Calcutta High Court](https://calcuttahighcourt.gov.in) | `CalcuttaHCClient` | Order/judgment search + PDF download (direct from HC website) |
+| [SCI Archive](https://registry.opendata.aws/indian-supreme-court-judgments/) (S3, CC-BY-4.0) | `ArchiveClient` | DuckDB metadata search + PDF retrieval, 1950–present; SCI bi-monthly + 25 HCs quarterly |
+| [HC Archive](https://registry.opendata.aws/indian-high-court-judgments/) (S3, CC-BY-4.0) | `ArchiveClient` | Same as above; routed via the unified `ArchiveClient` |
 
 ## API Reference
 
@@ -817,6 +861,121 @@ pdf_bytes = await client.download_order_pdf(order.pdf_url)
 
 ---
 
+### `ArchiveClient`
+
+Read-only access to the public AWS Open Data judgment archives (no CAPTCHA, no
+rate limits, no accounts). Requires the `archive` extra:
+
+```bash
+pip install 'bharat-courts[archive]'
+```
+
+```python
+from bharat_courts import ArchiveClient
+
+async with ArchiveClient(
+    cache_dir=None,          # str | None — defaults to ~/.cache/bharat-courts/archive/
+    cache_max_bytes=None,    # int | None — defaults to 5 GiB (or env override)
+    metadata_cache=True,     # bool — disable to skip the local parquet mirror
+) as client:
+    ...
+```
+
+DuckDB runs the metadata queries against partitioned parquet files; PDFs are
+served via direct HTTP GET (HC, one file per judgment) or random-access tar
+extraction (SCI, one tar per year). Both layers cache on disk.
+
+---
+
+#### `search(*, court=None, year=None, judge=None, party=None, citation=None, cnr=None, limit=50) -> list[Judgment]`
+
+Search both archives in one call. CNR-only queries auto-route via the prefix —
+no need to specify `court=` for `fetch_pdf("DLHC...")`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `court` | `Court \| str \| None` | No | `None` | Court object, code string (`"sci"`, `"delhi"`), or `None` to query both buckets |
+| `year` | `int \| tuple[int, int] \| None` | No | `None` | Single year (`2020`) or inclusive range (`(2018, 2024)`). Drives partition pruning — strongly recommended for non-CNR queries |
+| `judge` | `str \| None` | No | `None` | Case-insensitive substring on the judge field |
+| `party` | `str \| None` | No | `None` | SCI: searches petitioner/respondent/title. HC: title only (HC parquet has no party columns) |
+| `citation` | `str \| None` | No | `None` | SCI only — silently ignored for HC |
+| `cnr` | `str \| None` | No | `None` | Exact CNR match. Auto-resolves source from the 4-letter prefix when `court` isn't given |
+| `limit` | `int` | No | `50` | Total results across sources |
+
+**Returns:** `list[Judgment]` sorted by `decision_date DESC`.
+
+---
+
+#### `iter_judgments(*, court=None, year=None, judge=None, party=None, citation=None, cnr=None, batch_size=500, max_results=None) -> AsyncIterator[Judgment]`
+
+Stream judgments page-by-page via `LIMIT/OFFSET` with a stable sort
+(`decision_date DESC, cnr`). Use this for bulk pulls — "all 18k Delhi 2020
+judgments" — without materialising everything in memory.
+
+Sources are streamed sequentially (SCI first, then HC) with no cross-source
+date merge.
+
+```python
+count = 0
+async for j in client.iter_judgments(court="delhi", year=2020, batch_size=500):
+    count += 1
+    # process(j)
+```
+
+---
+
+#### `fetch_pdf(judgment_or_cnr, *, language="english") -> bytes`
+
+Fetch a judgment PDF. Pass a `Judgment` (preferred — avoids a metadata lookup)
+or a CNR string. SCI judgments support `language="hindi" | "tamil" | "gujarati" | …`
+(see `bharat_courts.archive.endpoints.SCI_LANGUAGE_MAP`); HC PDFs are
+English-only in the archive.
+
+```python
+data = await client.fetch_pdf("DLHC010230802020")        # ~250 KB direct GET
+data = await client.fetch_pdf("ESCR010000301950", language="english")
+# First SCI fetch in a year downloads the year tar (~40–500 MB); subsequent
+# fetches for that year are tar-extraction-fast.
+```
+
+**Raises:** `ArchivePdfError` for missing files, missing metadata fields, or
+HTTP failures.
+
+---
+
+#### `prefetch_sci_year(year, language="english") -> str`
+
+Pre-warm the SCI tar cache for a year. Useful before a batch of related
+fetches.
+
+---
+
+#### `count(*, court=None, year=None) -> dict[str, int]`
+
+Per-bucket row counts, e.g. `{"sci": 571}` for a single SCI year.
+
+---
+
+#### `cache_info() -> dict`
+
+Snapshot: `{"cache_dir": ..., "files": ..., "bytes": ..., "max_bytes": ...}`.
+
+---
+
+#### Helpers
+
+```python
+from bharat_courts import infer_court_from_cnr
+
+infer_court_from_cnr("DLHC010230802020")  # → Court(code="delhi", ...)
+infer_court_from_cnr("ESCR010000301950")  # → SUPREME_COURT
+infer_court_from_cnr("ZZZZ012345")        # → None
+```
+
+Use this if you're routing CNRs yourself (e.g. into the live `JudgmentSearchClient`).
+
+---
+
 ### Court Registry Functions
 
 ```python
@@ -1115,6 +1274,7 @@ bharat-courts districtcourts   states | districts | complexes | establishments |
 bharat-courts calcuttahc       search
 bharat-courts judgments        search | search-all
 bharat-courts sci              recent
+bharat-courts archive          query | get | download | count | cache
 bharat-courts install-skills
 ```
 
@@ -1165,9 +1325,19 @@ bharat-courts judgments search-all --text "land acquisition" --max-pages 5 --dow
 bharat-courts sci recent --limit 10
 bharat-courts sci recent --limit 5 --download ./sci-pdfs/
 
+# Historical archive (AWS Open Data buckets — needs `pip install bharat-courts[archive]`)
+bharat-courts archive query --court sci --judge "chandrachud" --year 2022 --limit 5
+bharat-courts archive query --court delhi --year 2020 --judge endlaw --limit 3
+bharat-courts archive get --cnr DLHC010230802020 --pdf --out ./judgment.pdf
+bharat-courts archive download --court sci --year 2020   # pre-warm the year tar
+bharat-courts archive count --court sci --year 2020      # → "sci: 571"
+bharat-courts archive cache                              # show disk usage
+bharat-courts archive cache --clear                      # wipe local cache
+
 # JSON output for piping to jq / spreadsheets
 bharat-courts --json courts --type sc | jq '.[].name'
 bharat-courts --json hcservices benches bombay
+bharat-courts --json archive query --court sci --year 2020 --judge bobde --limit 10
 
 # Install the AI agent skill bundle (Claude Code, Copilot, etc.)
 bharat-courts install-skills
@@ -1319,6 +1489,13 @@ src/bharat_courts/
 ├── sci/                 # Supreme Court (basic)
 │   ├── client.py
 │   └── parser.py
+├── archive/             # AWS Open Data archive (opt-in via [archive] extra)
+│   ├── client.py        # ArchiveClient — async facade
+│   ├── endpoints.py     # Bucket URIs + SCI language map
+│   ├── metadata.py      # DuckDB query layer over partitioned parquet
+│   ├── metadata_cache.py# Local mirror of parquet shards (TTL-invalidated)
+│   ├── schema.py        # Row → Judgment mapping (handles SCI + HC schemas)
+│   └── storage.py       # PDF cache (per-tar SCI, per-file HC) + LRU eviction
 └── cli.py               # Click CLI entry point
 ```
 
@@ -1361,6 +1538,32 @@ The District Courts portal (`services.ecourts.gov.in/ecourtindia_v6/`) uses a si
 5. **4-level court hierarchy** — State → District → Court Complex → Establishment (discovered dynamically)
 
 Both portals are handled transparently — session management, token rotation, CAPTCHA solving with retry, request/response parsing, and rate limiting.
+
+### Historical Archive (AWS Open Data)
+
+Two public S3 buckets in `ap-south-1`, CC-BY-4.0, maintained by Dattam Labs:
+
+- `s3://indian-supreme-court-judgments/` — SCI judgments 1950–present, bi-monthly updates
+- `s3://indian-high-court-judgments/` — 25 High Courts, quarterly updates
+
+Both partition metadata as Hive-style parquet (SCI: `year=YYYY/`; HC:
+`year=YYYY/court=<archive_id>_<state_code>/bench=<slug>/`) and ship PDFs in
+per-year tar bundles. The HC bucket additionally exposes individual PDFs at
+`data/pdf/year=…/court=…/bench=…/<basename>`, so single-PDF fetches don't
+need to download the whole tar.
+
+`ArchiveClient` reads anonymously via DuckDB's `httpfs` extension (no AWS
+account needed), translates rows through `row_to_judgment()` into the unified
+`Judgment` shape, and serves PDFs with on-disk LRU caching. CNR-only queries
+auto-route via the 4-letter prefix — `DLHC*` → Delhi, `ESCR*` → SCI,
+`HCBM*` → Bombay, `WBCH*` → Calcutta, etc. (the full mapping is in
+`courts._CNR_PREFIX_TO_COURT_CODE`, verified against a 2020 sample of every
+HC partition).
+
+The archive is **complementary** to the live clients, not a replacement: it
+only contains delivered judgments and lags by 2–3 months, so case status,
+cause lists, and in-progress orders still need `HCServicesClient` /
+`DistrictCourtClient`.
 
 ## License
 
