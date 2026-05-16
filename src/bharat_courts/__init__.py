@@ -15,6 +15,7 @@ from bharat_courts.courts import (
     list_high_courts,
 )
 from bharat_courts.districtcourts.client import DistrictCourtClient
+from bharat_courts.facade import Judgments
 from bharat_courts.hcservices.client import HCServicesClient
 from bharat_courts.hcservices.parser import CaptchaError
 from bharat_courts.http import RateLimitedClient
@@ -55,6 +56,7 @@ __all__ = [
     "HCServicesClient",
     "Judgment",
     "JudgmentResult",
+    "Judgments",
     "JudgmentSearchClient",
     "list_all_courts",
     "list_high_courts",

@@ -223,6 +223,97 @@ def install_skills():
     click.echo(f"Skills installed to `{skill_dest.relative_to(Path.cwd())}`.")
 
 
+@main.command()
+@click.option("--text", default=None, help="Free-text keyword search (routes to live).")
+@click.option("--court", "court_code", default=None, help="Court code: 'sci', 'delhi', etc.")
+@click.option("--year", default=None, help="Single year (2020) or range (2018-2024).")
+@click.option("--judge", default=None, help="Substring on judge name (archive).")
+@click.option("--party", default=None, help="Substring on petitioner/respondent/title.")
+@click.option("--citation", default=None, help="SCI citation substring.")
+@click.option("--cnr", default=None, help="CNR — auto-routes to archive via prefix.")
+@click.option(
+    "--source",
+    type=click.Choice(["auto", "archive", "live"]),
+    default="auto",
+    show_default=True,
+    help="Override the automatic source routing.",
+)
+@click.option("--limit", default=20, type=int, show_default=True)
+@click.pass_context
+def find(
+    ctx: click.Context,
+    text: str | None,
+    court_code: str | None,
+    year: str | None,
+    judge: str | None,
+    party: str | None,
+    citation: str | None,
+    cnr: str | None,
+    source: str,
+    limit: int,
+):
+    """Find judgments across archive + live — the source is picked for you.
+
+    Routing (in auto mode):
+    \b
+      cnr=                      → archive
+      text= only                → live
+      structured filters only   → archive
+      text + structured         → archive (text falls back to title-match)
+    """
+    from bharat_courts.facade import Judgments
+
+    # Parse year argument — reuse the archive's parser.
+    year_arg: int | tuple[int, int] | None
+    if year is None:
+        year_arg = None
+    elif "-" in year:
+        lo, hi = year.split("-", 1)
+        year_arg = (int(lo), int(hi))
+    else:
+        year_arg = int(year)
+
+    async def _go():
+        async with Judgments() as facade:
+            return await facade.find(
+                text=text,
+                court=court_code,
+                year=year_arg,
+                judge=judge,
+                party=party,
+                citation=citation,
+                cnr=cnr,
+                source=source,
+                limit=limit,
+            )
+
+    results = _run(_go())
+
+    if _is_json(ctx):
+        _emit_json([j.to_dict(exclude_none=True) for j in results])
+        return
+
+    if not results:
+        click.echo("No judgments found.")
+        return
+    click.echo(f"Found {len(results)} judgment(s):")
+    for j in results:
+        click.echo(f"\n[{j.source}] {j.title or '(no title)'}")
+        meta_parts = [p for p in (j.cnr, j.case_id, j.citation) if p]
+        if meta_parts:
+            click.echo("  " + " · ".join(meta_parts))
+        if j.court:
+            click.echo(f"  Court: {j.court.name}")
+        elif j.court_name_raw:
+            click.echo(f"  Court: {j.court_name_raw}")
+        if j.decision_date:
+            click.echo(f"  Decided: {j.decision_date}")
+        if j.judges:
+            click.echo(f"  Bench: {', '.join(j.judges)}")
+        if j.disposal_nature:
+            click.echo(f"  Outcome: {j.disposal_nature}")
+
+
 # ---------------------------------------------------------------------------
 # hcservices group
 # ---------------------------------------------------------------------------
