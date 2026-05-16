@@ -1336,5 +1336,313 @@ def sci_recent(ctx: click.Context, limit: int, download_dir: str | None):
             click.echo(f"  PDF: {j.pdf_url}")
 
 
+# ---------------------------------------------------------------------------
+# archive group  (AWS Open Data — historical judgment metadata)
+# ---------------------------------------------------------------------------
+
+
+@main.group()
+def archive():
+    """Historical judgment archive (AWS Open Data S3 buckets)."""
+
+
+def _parse_year_arg(year: str | None) -> int | tuple[int, int] | None:
+    """Accept ``"2020"`` or ``"2018-2024"``."""
+    if not year:
+        return None
+    if "-" in year:
+        lo, hi = year.split("-", 1)
+        return (int(lo), int(hi))
+    return int(year)
+
+
+def _print_judgment_archive_human(j: Any) -> None:
+    click.echo(f"\n{j.title or '(no title)'}")
+    parts: list[str] = []
+    if j.cnr:
+        parts.append(f"CNR {j.cnr}")
+    if j.case_id:
+        parts.append(j.case_id)
+    if j.citation:
+        parts.append(j.citation)
+    if parts:
+        click.echo("  " + " · ".join(parts))
+    if j.court:
+        click.echo(f"  Court: {j.court.name}")
+    elif j.court_name_raw:
+        click.echo(f"  Court: {j.court_name_raw}")
+    if j.decision_date:
+        click.echo(f"  Decided: {j.decision_date}")
+    if j.judges:
+        click.echo(f"  Bench: {', '.join(j.judges)}")
+    if j.disposal_nature:
+        click.echo(f"  Outcome: {j.disposal_nature}")
+
+
+@archive.command("query")
+@click.option(
+    "--court",
+    "court_code",
+    default=None,
+    help="Court code (e.g. 'sci', 'delhi'). Omit to query all sources.",
+)
+@click.option("--year", default=None, help="Single year (2020) or range (2018-2024).")
+@click.option("--judge", default=None, help="Case-insensitive judge substring.")
+@click.option("--party", default=None, help="Case-insensitive party/title substring.")
+@click.option("--citation", default=None, help="SCI citation substring.")
+@click.option("--cnr", default=None, help="Exact CNR match.")
+@click.option("--limit", default=20, type=int, show_default=True)
+@click.pass_context
+def archive_query(
+    ctx: click.Context,
+    court_code: str | None,
+    year: str | None,
+    judge: str | None,
+    party: str | None,
+    citation: str | None,
+    cnr: str | None,
+    limit: int,
+):
+    """Query historical judgment metadata from the AWS archive."""
+    try:
+        from bharat_courts.archive.client import ArchiveClient
+    except ImportError as e:
+        click.echo(
+            "Archive support requires the 'archive' extra: pip install 'bharat-courts[archive]'",
+            err=True,
+        )
+        raise SystemExit(1) from e
+
+    year_arg = _parse_year_arg(year)
+
+    async def _go():
+        async with ArchiveClient() as client:
+            return await client.search(
+                court=court_code,
+                year=year_arg,
+                judge=judge,
+                party=party,
+                citation=citation,
+                cnr=cnr,
+                limit=limit,
+            )
+
+    results = _run(_go())
+
+    if _is_json(ctx):
+        _emit_json([j.to_dict(exclude_none=True) for j in results])
+        return
+
+    if not results:
+        click.echo("No judgments found.")
+        return
+    click.echo(f"Found {len(results)} judgment(s):")
+    for j in results:
+        _print_judgment_archive_human(j)
+
+
+@archive.command("get")
+@click.option("--cnr", required=True, help="CNR to look up and fetch.")
+@click.option("--pdf", "as_pdf", is_flag=True, help="Save the PDF (otherwise print metadata).")
+@click.option(
+    "--out",
+    "out_path",
+    default=None,
+    help="Output file (PDF mode) or directory. Defaults to <cnr>.pdf in cwd.",
+)
+@click.option(
+    "--language",
+    default="english",
+    show_default=True,
+    help="SCI only: 'english' or a regional language code/name.",
+)
+@click.pass_context
+def archive_get(
+    ctx: click.Context,
+    cnr: str,
+    as_pdf: bool,
+    out_path: str | None,
+    language: str,
+):
+    """Look up a CNR in the archive; optionally save the PDF."""
+    try:
+        from bharat_courts.archive.client import ArchiveClient, ArchivePdfError
+    except ImportError as e:
+        click.echo(
+            "Archive support requires the 'archive' extra: pip install 'bharat-courts[archive]'",
+            err=True,
+        )
+        raise SystemExit(1) from e
+
+    async def _go():
+        async with ArchiveClient() as client:
+            results = await client.search(cnr=cnr, limit=1)
+            if not results:
+                return None, None
+            j = results[0]
+            if not as_pdf:
+                return j, None
+            try:
+                data = await client.fetch_pdf(j, language=language)
+            except ArchivePdfError as err:
+                return j, ("error", str(err))
+            return j, ("ok", data)
+
+    judgment, pdf_result = _run(_go())
+
+    if judgment is None:
+        click.echo(f"No archive record for CNR {cnr}", err=True)
+        raise SystemExit(2)
+
+    if not as_pdf:
+        if _is_json(ctx):
+            _emit_json(judgment.to_dict(exclude_none=True))
+            return
+        _print_judgment_archive_human(judgment)
+        return
+
+    assert pdf_result is not None
+    status, payload = pdf_result
+    if status == "error":
+        click.echo(f"PDF fetch failed: {payload}", err=True)
+        raise SystemExit(3)
+
+    data: bytes = payload  # type: ignore[assignment]
+    if out_path:
+        out = Path(out_path).expanduser()
+        if out.is_dir() or out_path.endswith("/"):
+            out = out / f"{cnr}.pdf"
+    else:
+        out = Path.cwd() / f"{cnr}.pdf"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(data)
+
+    if _is_json(ctx):
+        _emit_json({"cnr": cnr, "bytes": len(data), "path": str(out)})
+    else:
+        click.echo(f"Saved {len(data):,} bytes → {out}")
+
+
+@archive.command("download")
+@click.option(
+    "--court",
+    "court_code",
+    default="sci",
+    show_default=True,
+    help="Court code. SCI pre-warms the year tar; HC is a no-op for now.",
+)
+@click.option("--year", required=True, type=int)
+@click.option("--language", default="english", show_default=True, help="SCI only.")
+@click.pass_context
+def archive_download(
+    ctx: click.Context,
+    court_code: str,
+    year: int,
+    language: str,
+):
+    """Pre-warm the local cache (currently SCI tar bundles only)."""
+    try:
+        from bharat_courts.archive.client import ArchiveClient
+    except ImportError as e:
+        click.echo(
+            "Archive support requires the 'archive' extra: pip install 'bharat-courts[archive]'",
+            err=True,
+        )
+        raise SystemExit(1) from e
+
+    court = _resolve_court_or_die(court_code)
+    if court.court_type.value != "supreme_court":
+        click.echo(
+            f"download only supports SCI year tars today — {court.name} ships "
+            "individual PDFs that are fetched on demand by `archive get`.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    async def _go():
+        async with ArchiveClient() as client:
+            return await client.prefetch_sci_year(year, language=language)
+
+    path = _run(_go())
+
+    if _is_json(ctx):
+        _emit_json({"path": path})
+    else:
+        click.echo(f"Cached: {path}")
+
+
+@archive.command("cache")
+@click.option("--clear", is_flag=True, help="Delete the entire archive cache directory.")
+@click.pass_context
+def archive_cache(ctx: click.Context, clear: bool):
+    """Show cache stats or clear the cache."""
+    try:
+        from bharat_courts.archive.client import ArchiveClient
+    except ImportError as e:
+        click.echo(
+            "Archive support requires the 'archive' extra: pip install 'bharat-courts[archive]'",
+            err=True,
+        )
+        raise SystemExit(1) from e
+
+    async def _info():
+        async with ArchiveClient() as client:
+            return client.cache_info()
+
+    info = _run(_info())
+
+    if clear:
+        import shutil
+
+        cache_dir = Path(info["cache_dir"])
+        if cache_dir.exists():
+            shutil.rmtree(cache_dir)
+            click.echo(f"Cleared {info['files']} files ({info['bytes']:,} bytes) from {cache_dir}")
+        else:
+            click.echo(f"Cache directory does not exist: {cache_dir}")
+        return
+
+    if _is_json(ctx):
+        _emit_json(info)
+        return
+    click.echo(f"Cache directory: {info['cache_dir']}")
+    click.echo(f"  Files: {info['files']:,}")
+    click.echo(f"  Size:  {info['bytes']:,} bytes ({info['bytes'] / (1024**2):.1f} MiB)")
+    click.echo(f"  Cap:   {info['max_bytes']:,} bytes ({info['max_bytes'] / (1024**3):.1f} GiB)")
+
+
+@archive.command("count")
+@click.option(
+    "--court",
+    "court_code",
+    default=None,
+    help="Court code (e.g. 'sci', 'delhi'). Omit to count both buckets.",
+)
+@click.option("--year", default=None, type=int, help="Restrict to a single year.")
+@click.pass_context
+def archive_count(ctx: click.Context, court_code: str | None, year: int | None):
+    """Show row counts in the archive for a court and/or year."""
+    try:
+        from bharat_courts.archive.client import ArchiveClient
+    except ImportError as e:
+        click.echo(
+            "Archive support requires the 'archive' extra: pip install 'bharat-courts[archive]'",
+            err=True,
+        )
+        raise SystemExit(1) from e
+
+    async def _go():
+        async with ArchiveClient() as client:
+            return await client.count(court=court_code, year=year)
+
+    counts = _run(_go())
+
+    if _is_json(ctx):
+        _emit_json(counts)
+        return
+    for source, n in counts.items():
+        click.echo(f"  {source}: {n:,}")
+
+
 if __name__ == "__main__":
     main()

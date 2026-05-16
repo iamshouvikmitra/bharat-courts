@@ -27,6 +27,9 @@ def _serialize_value(v: Any) -> Any:
         return [_serialize_value(i) for i in v]
     if isinstance(v, dict):
         return {k: _serialize_value(val) for k, val in v.items()}
+    if hasattr(v, "to_dict") and callable(v.to_dict):
+        # Recurse into nested serializable models (e.g. Judgment.court → Court).
+        return v.to_dict()
     return v
 
 
@@ -135,6 +138,55 @@ class JudgmentResult(_Serializable):
     source_url: str = ""
     source_id: str = ""
     metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class Judgment(_Serializable):
+    """A delivered judgment, source-agnostic.
+
+    Populated by the archive client (parquet metadata) and, in later phases,
+    by the live judgment-search clients via a federated facade. Fields that
+    don't apply to a given source are left ``None`` / empty.
+    """
+
+    # Identity — CNR is the join key with the live SDK.
+    cnr: str | None = None
+    case_id: str | None = None  # e.g. "1950 INSC 25" (SCI only)
+    title: str | None = None
+
+    # Bench
+    court: Court | None = None  # normalized bharat-courts Court
+    # Original string from the archive parquet (SCI only — for HC the resolved
+    # ``court`` field is canonical and this is left empty).
+    court_name_raw: str = ""
+    bench: str | None = None  # archive bench slug, e.g. "manipurhc_pg" (HC only)
+    # HC parquet's ``court_code`` column, e.g. ``"7~26"`` — needed to build the
+    # bucket S3 path for PDF fetches. ``None`` for SCI rows.
+    court_code: str | None = None
+    judges: list[str] = field(default_factory=list)
+    author_judge: str | None = None  # SCI only
+
+    # Dates
+    decision_date: date | None = None
+    date_of_registration: date | None = None  # HC only
+
+    # Parties (SCI only — HC encodes parties in title)
+    petitioner: str | None = None
+    respondent: str | None = None
+
+    # Identifiers / status
+    citation: str | None = None  # SCI only
+    disposal_nature: str | None = None
+    description: str | None = None
+
+    # PDF access (raw refs for Phase 1; Phase 2 wraps in PdfRef)
+    pdf_path: str | None = None  # SCI "path" or HC "pdf_link"
+    available_languages: list[str] = field(default_factory=list)
+    pdf_exists: bool | None = None
+
+    # Provenance
+    source: str = "archive"
+    year: int | None = None
 
 
 @dataclass

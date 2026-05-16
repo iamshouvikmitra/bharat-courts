@@ -26,13 +26,14 @@ dependencies = [
 ocr = ["Pillow>=11.0", "ddddocr>=1.5.5,<1.6"]
 onnx = ["onnxruntime>=1.17", "Pillow>=11.0", "numpy>=1.24"]
 cli = ["click>=8.1", "rich>=13.0"]
+archive = ["duckdb>=1.1"]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "respx>=0.22",
     "ruff>=0.8",
 ]
-all = ["bharat-courts[ocr,onnx,cli,dev]"]
+all = ["bharat-courts[ocr,onnx,cli,archive,dev]"]
 
 [project.scripts]
 bharat-courts = "bharat_courts.cli:main"

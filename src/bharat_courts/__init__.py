@@ -9,6 +9,8 @@ from bharat_courts.courts import (
     SUPREME_COURT,
     get_court,
     get_court_by_name,
+    get_court_by_state_code,
+    infer_court_from_cnr,
     list_all_courts,
     list_high_courts,
 )
@@ -24,6 +26,7 @@ from bharat_courts.models import (
     CauseListPDF,
     Court,
     CourtType,
+    Judgment,
     JudgmentResult,
     SearchResult,
 )
@@ -47,7 +50,10 @@ __all__ = [
     "default_solver",
     "get_court",
     "get_court_by_name",
+    "get_court_by_state_code",
+    "infer_court_from_cnr",
     "HCServicesClient",
+    "Judgment",
     "JudgmentResult",
     "JudgmentSearchClient",
     "list_all_courts",
@@ -70,5 +76,12 @@ try:
     from bharat_courts.captcha.onnx import ONNXCaptchaSolver  # noqa: F401
 
     __all__ += ["ONNXCaptchaSolver"]
+except ImportError:
+    pass
+
+try:
+    from bharat_courts.archive.client import ArchiveClient  # noqa: F401
+
+    __all__ += ["ArchiveClient"]
 except ImportError:
     pass

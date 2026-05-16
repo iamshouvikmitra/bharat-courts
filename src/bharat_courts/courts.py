@@ -236,6 +236,43 @@ _BY_NAME: dict[str, Court] = {c.name.lower(): c for c in ALL_COURTS}
 _BY_JUDGMENT_CODE: dict[str, Court] = {
     c.judgment_code: c for c in ALL_COURTS if c.judgment_code and c.bench is None
 }
+_BY_STATE_CODE: dict[str, Court] = {
+    c.state_code: c for c in ALL_COURTS if c.bench is None and c.state_code != "0"
+}
+
+# CNR (Court Number Record) prefix → court mapping. The 4-letter prefix is
+# encoded into every eCourts CNR. Most HCs use ``<ISO>HC...`` (DLHC, MNHC, …)
+# but a few legacy ones diverge: Bombay = ``HCBM``, Madras = ``HCMA``,
+# Telangana = ``HBHC``, Calcutta = ``WBCH``. Verified against the archive's
+# 2020 parquet sample (one CNR per partition, all 25 HCs + SCI).
+_CNR_PREFIX_TO_COURT_CODE: dict[str, str] = {
+    "ESCR": "sci",
+    "DLHC": "delhi",
+    "MNHC": "manipur",
+    "BRHC": "patna",
+    "APHC": "andhra",
+    "KAHC": "karnataka",
+    "KLHC": "kerala",
+    "HPHC": "himachal",
+    "GAHC": "gauhati",
+    "JHHC": "jharkhand",
+    "RJHC": "rajasthan",
+    "ODHC": "orissa",
+    "JKHC": "jammu",
+    "UPHC": "allahabad",
+    "UKHC": "uttarakhand",
+    "WBCH": "calcutta",
+    "GJHC": "gujarat",
+    "CGHC": "chhattisgarh",
+    "TRHC": "tripura",
+    "MLHC": "meghalaya",
+    "PHHC": "punjab",
+    "MPHC": "mp",
+    "SKHC": "sikkim",
+    "HCBM": "bombay",
+    "HCMA": "madras",
+    "HBHC": "telangana",
+}
 
 
 def get_court(code: str) -> Court | None:
@@ -255,6 +292,33 @@ def get_court_by_judgment_code(judgment_code: str) -> Court | None:
     judgment_code="27" returns Bombay HC (not Nagpur/Aurangabad/Goa bench).
     """
     return _BY_JUDGMENT_CODE.get(judgment_code)
+
+
+def get_court_by_state_code(state_code: str) -> Court | None:
+    """Look up the principal court for a state code (bench variants excluded).
+
+    The archive bucket partitions HCs by state code; this resolves the
+    canonical court for that partition. Returns None for state_code "0"
+    (Supreme Court — use ``SUPREME_COURT`` directly).
+    """
+    return _BY_STATE_CODE.get(str(state_code))
+
+
+def infer_court_from_cnr(cnr: str | None) -> Court | None:
+    """Identify the court that issued a CNR from its 4-letter prefix.
+
+    The CNR's prefix is deterministic per court (verified against the AWS
+    archive for all 25 HCs + SCI). Returns ``None`` for unknown / malformed
+    inputs — never raises.
+
+    Useful for routing archive queries: passing the CNR alone scans every
+    HC partition (slow), but ``infer_court_from_cnr(cnr)`` lets the caller
+    narrow to one bucket / partition first.
+    """
+    if not cnr or len(cnr) < 4:
+        return None
+    code = _CNR_PREFIX_TO_COURT_CODE.get(cnr[:4].upper())
+    return get_court(code) if code else None
 
 
 def list_high_courts() -> list[Court]:
