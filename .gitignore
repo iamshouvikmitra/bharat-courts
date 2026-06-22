@@ -46,3 +46,6 @@ AUDIT.md
 # Docs build
 site/
 .venv-docs/
+
+# Keep committed documentation image assets (overrides the *.png rule above)
+!docs/assets/*.png
