@@ -1,0 +1,8 @@
+# Documentation toolchain (MkDocs Material + auto API reference).
+# mkdocstrings uses griffe's static analysis, so the package's runtime
+# dependencies do NOT need to be installed to build the API reference.
+mkdocs-material>=9.5
+mkdocstrings[python]>=0.27
+mkdocs-minify-plugin>=0.8
+# Used by mkdocstrings to pretty-format API signatures in the reference.
+black>=24.0
