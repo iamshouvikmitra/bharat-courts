@@ -1,0 +1,81 @@
+/* ============================================================
+   bharat-courts — global theme tokens (applies to all doc pages)
+   Custom indigo palette layered on Material's "custom" primary/accent.
+   ============================================================ */
+
+:root {
+  --md-primary-fg-color:        #0b0b12;
+  --md-primary-fg-color--light: #1a1a28;
+  --md-primary-fg-color--dark:  #060609;
+  --md-primary-bg-color:        #ffffff;
+  --md-primary-bg-color--light: rgba(255, 255, 255, 0.72);
+
+  --md-accent-fg-color:         #5b5bd6;
+  --md-accent-fg-color--transparent: rgba(91, 91, 214, 0.12);
+
+  --md-typeset-a-color:         #5048c4;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 250;
+  --md-default-bg-color:        #0d0d14;
+  --md-accent-fg-color:         #8d8df3;
+  --md-typeset-a-color:         #9b9bf5;
+  --md-primary-fg-color:        #0b0b12;
+}
+
+/* Typographic roles — serif display (Fraunces) for the top headings + brand,
+   Inter for body/UI (theme default), JetBrains Mono for code (theme default). */
+:root { --bc-display: "Fraunces", "Iowan Old Style", Georgia, serif; }
+
+.md-typeset h1,
+.md-typeset h2 {
+  font-family: var(--bc-display);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.md-typeset h1 { font-weight: 600; }
+/* h3+ stay in Inter for scannable, technical subheadings */
+.md-typeset h3,
+.md-typeset h4 { letter-spacing: -0.01em; font-weight: 700; }
+
+/* Brand wordmark in the header uses the display serif */
+.md-header__title,
+.md-header__topic .md-ellipsis { font-family: var(--bc-display); font-weight: 600; font-size: 1.05rem; }
+
+/* mkdocstrings symbol headings are code-y identifiers — keep them mono, not serif */
+.md-typeset h1 code,
+.md-typeset h2 code,
+.doc-heading code { font-family: var(--md-code-font, monospace); }
+.doc-heading { font-family: var(--md-code-font, monospace) !important; font-weight: 600; }
+
+/* Brand the active nav tab + links */
+.md-tabs { background: var(--md-primary-fg-color); }
+.md-typeset a:hover { color: var(--md-accent-fg-color); }
+
+/* Friendly, rounded code + admonition blocks to match the landing */
+.md-typeset pre > code { border-radius: 10px; }
+.md-typeset .admonition,
+.md-typeset details { border-radius: 12px; border-left-width: 3px; }
+
+/* Tables: a little more air for the API/spec tables we use heavily */
+.md-typeset table:not([class]) { border-radius: 10px; overflow: hidden; font-size: .78rem; }
+.md-typeset table:not([class]) th { background: var(--md-accent-fg-color--transparent); font-weight: 700; }
+
+/* Buttons rendered from markdown (.md-button) — match brand */
+.md-typeset .md-button {
+  border-radius: 100px; border-width: 1px; font-weight: 600;
+}
+.md-typeset .md-button--primary {
+  background: linear-gradient(180deg, #7c7cf0, #5b5bd6);
+  border-color: transparent; color: #fff;
+}
+.md-typeset .md-button--primary:hover { background: #4a4ac4; border-color: transparent; }
+
+/* mkdocstrings API reference: clearer symbol separation */
+.doc-heading { scroll-margin-top: 4rem; }
+.doc-contents { border-left: 2px solid var(--md-accent-fg-color--transparent); padding-left: 1rem; }
+.doc-symbol { font-size: .7em; }
+
+/* Hide the "made with material" generator note already off via config; keep footer tidy */
+.md-footer-meta { background: #060609; }

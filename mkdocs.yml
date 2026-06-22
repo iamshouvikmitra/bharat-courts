@@ -1,0 +1,167 @@
+site_name: bharat-courts
+site_url: https://iamshouvikmitra.github.io/bharat-courts/
+site_description: >-
+  Plug India's entire judicial record into the AI you already use. bharat-courts
+  is a free, open-source skill that lets Claude, ChatGPT and your own tools search
+  cases, pull orders and read cause lists from official eCourts sources — locally,
+  with no per-query API fees.
+site_author: Shouvik Mitra
+repo_name: iamshouvikmitra/bharat-courts
+repo_url: https://github.com/iamshouvikmitra/bharat-courts
+edit_uri: edit/main/docs/
+copyright: >-
+  bharat-courts is open-source under the MIT License. Court data is sourced from
+  the official eCourts platform and the Indian Judgments AWS Open Data buckets
+  (CC-BY-4.0, maintained by Dattam Labs).
+
+theme:
+  name: material
+  custom_dir: overrides
+  language: en
+  logo: assets/logo.svg
+  favicon: assets/favicon.svg
+  icon:
+    repo: fontawesome/brands/github
+  font:
+    text: Inter
+    code: JetBrains Mono
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+  features:
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.tooltips
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/iamshouvikmitra/bharat-courts
+      name: bharat-courts on GitHub
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/bharat-courts/
+      name: bharat-courts on PyPI
+  generator: false
+
+plugins:
+  - search
+  - minify:
+      minify_html: true
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            members_order: source
+            separate_signature: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+            merge_init_into_class: true
+            docstring_section_style: table
+            filters: ["!^_"]
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      title: On this page
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+nav:
+  - Home: index.md
+  - For Lawyers:
+      - lawyers/index.md
+      - What you can ask: lawyers/prompts.md
+      - Set up in Claude Desktop: lawyers/claude-desktop.md
+      - Set up in Claude Code & CoWork: lawyers/claude-code.md
+      - Use with ChatGPT & other AI: lawyers/chatgpt-and-others.md
+      - Questions & answers: lawyers/faq.md
+  - Getting Started:
+      - start/installation.md
+      - Quickstart: start/quickstart.md
+      - Configuration: start/configuration.md
+  - Guides:
+      - The Judgments facade: guides/facade.md
+      - High Courts: guides/high-courts.md
+      - District Courts: guides/district-courts.md
+      - Calcutta High Court: guides/calcutta-hc.md
+      - Judgment search: guides/judgment-search.md
+      - Supreme Court: guides/supreme-court.md
+      - Historical archive: guides/archive.md
+      - CAPTCHA solving: guides/captcha.md
+      - Command-line interface: guides/cli.md
+  - API Reference:
+      - reference/index.md
+      - Judgments facade: reference/facade.md
+      - Live clients: reference/clients.md
+      - Archive client: reference/archive.md
+      - Data models: reference/models.md
+      - Courts registry: reference/courts.md
+      - CAPTCHA solvers: reference/captcha.md
+      - Configuration: reference/config.md
+  - About:
+      - How it works: about/how-it-works.md
+      - Data & licensing: about/data-sources.md
+      - Contributing: about/contributing.md

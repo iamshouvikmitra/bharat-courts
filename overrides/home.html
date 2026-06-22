@@ -1,0 +1,287 @@
+{% extends "main.html" %}
+
+<!--
+  Landing page for bharat-courts.
+  Follows Material's documented pattern: inject the marketing page into the
+  `tabs` block (full-bleed, above the content grid) and blank out `content`.
+  Sidebars are hidden via the page's front matter (hide: [navigation, toc]).
+-->
+
+{% block tabs %}
+  {{ super() }}
+
+  <style>{% include "partials/home.css" %}</style>
+
+  <section class="bc-hero">
+    <div class="bc-hero__glow" aria-hidden="true"></div>
+    <div class="bc-wrap bc-hero__inner">
+      <div class="bc-hero__copy">
+        <p class="bc-eyebrow">
+          <span class="bc-dot"></span> Free &amp; open-source · Straight from the official eCourts record
+        </p>
+        <h1 class="bc-hero__title">
+          Every Indian court case.<br>
+          <span class="bc-grad">In the AI you already use.</span>
+        </h1>
+        <p class="bc-hero__sub">
+          <strong>bharat-courts</strong> turns Claude, ChatGPT and your own tools into a tireless
+          research associate — searching cases, pulling orders and reading cause lists across
+          <strong>700+ District Courts</strong>, all <strong>25 High Courts</strong> and the
+          <strong>Supreme Court</strong>. Ask in plain English. Get answers from the official record.
+        </p>
+        <div class="bc-cta">
+          <a class="bc-btn bc-btn--primary" href="lawyers/">Add it to your AI
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M13.3 5.3 14.7 4l8 8-8 8-1.4-1.3 5.6-5.7H1v-2h17.9z"/></svg>
+          </a>
+          <a class="bc-btn bc-btn--ghost" href="start/installation/">Read the docs</a>
+          <a class="bc-btn bc-btn--text" href="https://github.com/iamshouvikmitra/bharat-courts" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 .5A11.5 11.5 0 0 0 .5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.34-1.3-1.7-1.3-1.7-1.06-.72.08-.7.08-.7 1.17.08 1.78 1.2 1.78 1.2 1.04 1.78 2.74 1.27 3.4.97.11-.76.41-1.27.74-1.56-2.55-.29-5.23-1.28-5.23-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.18 1.84 1.18 3.1 0 4.43-2.69 5.41-5.25 5.69.42.37.8 1.1.8 2.22v3.29c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5"/></svg>
+            GitHub
+          </a>
+        </div>
+        <ul class="bc-stats">
+          <li><span>1950</span>→ today archive</li>
+          <li><span>25</span> High Courts</li>
+          <li><span>700+</span> District Courts</li>
+          <li><span>₹0</span> per query</li>
+        </ul>
+      </div>
+
+      <div class="bc-chat" role="img" aria-label="Example of asking an AI assistant a court-data question">
+        <div class="bc-chat__bar"><span></span><span></span><span></span> bharat-courts · your AI assistant</div>
+        <div class="bc-chat__body">
+          <div class="bc-msg bc-msg--user">
+            Pull every order in WPA 12886 of 2024 before the Calcutta High Court and summarise the latest one.
+          </div>
+          <div class="bc-msg bc-msg--ai">
+            <p>Found the matter (CNR <code>WBCH…2024</code>) and <strong>7 orders</strong> on the official portal.</p>
+            <p>The most recent, dated <strong>11 Mar 2025</strong>, disposes of the interim application and lists the writ for final hearing. I've saved all 7 order PDFs to your folder.</p>
+            <p class="bc-msg__meta">↳ source: calcuttahighcourt.gov.in · fetched locally · 0 API credits used</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bc-trust">
+      <div class="bc-wrap">
+        <p class="bc-trust__label">Works inside the tools you and your team already trust</p>
+        <ul class="bc-trust__row">
+          <li>Claude Desktop</li>
+          <li>Claude Code</li>
+          <li>Claude CoWork</li>
+          <li>ChatGPT</li>
+          <li>GitHub Copilot</li>
+          <li>Any MCP-compatible assistant</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- PROBLEM -->
+  <section class="bc-section">
+    <div class="bc-wrap">
+      <p class="bc-kicker">The grind you didn't sign up for</p>
+      <h2 class="bc-h2">Litigation runs on data that's painful to reach.</h2>
+      <div class="bc-grid bc-grid--3">
+        <article class="bc-pain">
+          <h3>Portal roulette &amp; CAPTCHAs</h3>
+          <p>You know the case is there. But it's another login, another blurry CAPTCHA, another five clicks — for a single hearing date.</p>
+        </article>
+        <article class="bc-pain">
+          <h3>700+ scattered portals</h3>
+          <p>Every district court has its own dropdown maze. Tracking a matter across forums means re-learning the same form, again and again.</p>
+        </article>
+        <article class="bc-pain">
+          <h3>Subscriptions that still make you click</h3>
+          <p>Premium legal databases cost a fortune each year — and you <em>still</em> end up back on eCourts for the primary record.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section class="bc-section bc-section--alt">
+    <div class="bc-wrap">
+      <p class="bc-kicker">From install to answer in minutes</p>
+      <h2 class="bc-h2">Three steps. Then just ask.</h2>
+      <div class="bc-steps">
+        <article class="bc-step">
+          <div class="bc-step__n">1</div>
+          <h3>Install it once</h3>
+          <p>Drop the skill into your AI assistant with a single command. No keys, no server, no account.</p>
+          <pre class="bc-code"><code>bharat-courts install-skills</code></pre>
+        </article>
+        <article class="bc-step">
+          <div class="bc-step__n">2</div>
+          <h3>Ask in plain English</h3>
+          <p>Talk to your assistant the way you'd brief a junior — by party, case number, CNR, judge or keyword.</p>
+          <pre class="bc-code"><code>"Is Sharma vs State listed
+ in Bombay HC this week?"</code></pre>
+        </article>
+        <article class="bc-step">
+          <div class="bc-step__n">3</div>
+          <h3>Get the official record</h3>
+          <p>Status, orders, cause lists and 75 years of judgments — with source links and downloadable PDFs.</p>
+          <pre class="bc-code"><code>→ 3 matters · 12 orders
+→ PDFs saved locally</code></pre>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section class="bc-section">
+    <div class="bc-wrap">
+      <p class="bc-kicker">One skill, the whole judicial record</p>
+      <h2 class="bc-h2">Everything an associate would dig up — instantly.</h2>
+      <div class="bc-grid bc-grid--3 bc-features">
+        <article class="bc-card">
+          <div class="bc-ic">{% include "partials/ic_search.svg" %}</div>
+          <h3>Plain-English case lookup</h3>
+          <p>Search by party, case number, CNR or filing year across High Courts and District Courts — no codes to memorise.</p>
+        </article>
+        <article class="bc-card">
+          <div class="bc-ic">{% include "partials/ic_clock.svg" %}</div>
+          <h3>Live status &amp; daily cause lists</h3>
+          <p>Current stage, next hearing date and the day's cause list, pulled fresh from the live portals.</p>
+        </article>
+        <article class="bc-card">
+          <div class="bc-ic">{% include "partials/ic_book.svg" %}</div>
+          <h3>75 years of judgments</h3>
+          <p>The Supreme Court from 1950 and 25 High Courts, searchable by judge, year, citation or keyword.</p>
+        </article>
+        <article class="bc-card">
+          <div class="bc-ic">{% include "partials/ic_pdf.svg" %}</div>
+          <h3>One-tap PDF downloads</h3>
+          <p>Orders, judgments and cause lists fetched and filed to your machine, ready to read or attach.</p>
+        </article>
+        <article class="bc-card">
+          <div class="bc-ic">{% include "partials/ic_lock.svg" %}</div>
+          <h3>Runs on your machine</h3>
+          <p>Queries go straight from your computer to the official source. Your matters stay your business.</p>
+        </article>
+        <article class="bc-card">
+          <div class="bc-ic">{% include "partials/ic_rupee.svg" %}</div>
+          <h3>No per-query fees</h3>
+          <p>Open-source and free. No metered data API, no annual database licence, no surprise bills.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- USE CASES -->
+  <section class="bc-section bc-section--alt">
+    <div class="bc-wrap">
+      <p class="bc-kicker">Built for the way you actually work</p>
+      <h2 class="bc-h2">A research desk that never sleeps.</h2>
+      <div class="bc-grid bc-grid--2 bc-usecases">
+        <article class="bc-use">
+          <h3>The night before a hearing</h3>
+          <p class="bc-use__say">"What's the latest order in this matter, and is it listed tomorrow?"</p>
+          <p>One question, the current stage, the last order and tomorrow's cause-list position — settled before dinner.</p>
+        </article>
+        <article class="bc-use">
+          <h3>Onboarding a new brief</h3>
+          <p class="bc-use__say">"Get the full order history for this CNR and summarise it."</p>
+          <p>Walk into the first conference already across every interim order, in chronological order, with the PDFs in hand.</p>
+        </article>
+        <article class="bc-use">
+          <h3>Hunting for precedent</h3>
+          <p class="bc-use__say">"Find Supreme Court judgments on the right to privacy since 2017."</p>
+          <p>Sweep three-quarters of a century of judgments by judge, year, citation or phrase — without leaving the chat.</p>
+        </article>
+        <article class="bc-use">
+          <h3>The morning cause list</h3>
+          <p class="bc-use__say">"Show me everything listed before my bench today."</p>
+          <p>Start each day with the day's board already pulled, parsed and prioritised.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- LOCAL / COST -->
+  <section class="bc-section bc-band">
+    <div class="bc-wrap bc-band__inner">
+      <div class="bc-band__col">
+        <p class="bc-kicker bc-kicker--light">Confidential by design</p>
+        <h2 class="bc-h2 bc-h2--light">Your practice is privileged.<br>Keep it that way.</h2>
+        <p class="bc-band__p">
+          bharat-courts runs on <strong>your</strong> computer and talks <strong>directly</strong> to the
+          official court sources. There's no bharat-courts server in the middle, no third-party data
+          vendor logging which clients you research, and no cloud account to create.
+        </p>
+        <ul class="bc-checks">
+          <li>Queries go device → official source, full stop</li>
+          <li>Nothing routed through a paid data middleman</li>
+          <li>Open-source — audit every line yourself</li>
+        </ul>
+      </div>
+      <div class="bc-band__col">
+        <p class="bc-kicker bc-kicker--light">The maths is simple</p>
+        <h2 class="bc-h2 bc-h2--light">No metered APIs.<br>No annual licence.</h2>
+        <p class="bc-band__p">
+          Commercial legal-data subscriptions and pay-per-call APIs add up fast. bharat-courts is free
+          and open-source: the only thing you pay for is the AI assistant you're <em>already</em> using.
+        </p>
+        <div class="bc-pricetag">
+          <span class="bc-pricetag__big">₹0</span>
+          <span class="bc-pricetag__sub">per search · per order · per judgment · forever</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOR ENGINEERS -->
+  <section class="bc-section">
+    <div class="bc-wrap bc-eng">
+      <div class="bc-eng__copy">
+        <p class="bc-kicker">For the team building legal-tech</p>
+        <h2 class="bc-h2">A real SDK under the skill.</h2>
+        <p class="bc-eng__p">
+          The same engine your assistant uses is a clean, fully-typed async Python library and CLI.
+          Federated search that auto-routes between the live portals and a DuckDB-backed historical
+          archive, pluggable CAPTCHA solving, and dataclasses that serialise straight to JSON.
+        </p>
+        <div class="bc-cta">
+          <a class="bc-btn bc-btn--primary" href="guides/facade/">Explore the guides</a>
+          <a class="bc-btn bc-btn--ghost" href="reference/">API reference</a>
+        </div>
+        <ul class="bc-eng__tags">
+          <li>async / await</li><li>typed dataclasses</li><li>pip install</li>
+          <li>CLI + JSON</li><li>pytest · 250 tests</li><li>MIT licensed</li>
+        </ul>
+      </div>
+      <div class="bc-eng__code">
+        <pre class="bc-code bc-code--block"><code>import asyncio
+from bharat_courts import Judgments
+
+async def main():
+    async with Judgments() as j:
+        hits = await j.find(
+            judge="chandrachud",
+            year=(2018, 2024),
+            court="sci",
+            limit=10,
+        )
+        for r in hits:
+            print(r.decision_date, r.title)
+
+asyncio.run(main())</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- FINAL CTA -->
+  <section class="bc-final">
+    <div class="bc-wrap bc-final__inner">
+      <h2>Give your AI the court record.</h2>
+      <p>Five minutes to set up. Free forever. Sourced straight from the official portals.</p>
+      <div class="bc-cta bc-cta--center">
+        <a class="bc-btn bc-btn--primary bc-btn--lg" href="lawyers/">Get started — it's free</a>
+        <a class="bc-btn bc-btn--ghost bc-btn--lg" href="lawyers/prompts/">See what you can ask</a>
+      </div>
+    </div>
+  </section>
+{% endblock %}
+
+{% block content %}{% endblock %}

@@ -42,3 +42,7 @@ CLAUDE.md
 # Private audit notes
 AUDIT.md
 .claude/
+
+# Docs build
+site/
+.venv-docs/

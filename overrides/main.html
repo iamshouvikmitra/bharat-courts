@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+<!--
+  SEO + social metadata for every page. This site is fully static / pre-rendered
+  (one complete HTML document per route), so all content is crawlable on first
+  byte — no client-side hydration required. These tags add descriptions, Open
+  Graph / Twitter cards, canonical URLs and structured data on top of that.
+-->
+
+{% block extrahead %}
+  {# Display serif (Fraunces) for headlines — Inter (body) and JetBrains Mono
+     (code) are loaded by the Material theme. #}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap">
+
+  {# Resolve a per-page title + description, falling back to site defaults. #}
+  {%- if page and page.meta and page.meta.title -%}
+    {%- set seo_title = page.meta.title -%}
+  {%- elif page and page.title and not page.is_homepage -%}
+    {%- set seo_title = page.title ~ " · " ~ config.site_name -%}
+  {%- else -%}
+    {%- set seo_title = config.site_name ~ " — Indian court data, in the AI you already use" -%}
+  {%- endif -%}
+
+  {%- if page and page.meta and page.meta.description -%}
+    {%- set seo_desc = page.meta.description -%}
+  {%- else -%}
+    {%- set seo_desc = config.site_description -%}
+  {%- endif -%}
+
+  {%- set seo_image = config.site_url ~ "assets/og-image.png" -%}
+  {%- set seo_url = page.canonical_url if page else config.site_url -%}
+
+  {# Material already emits <meta name="description"> when a page sets one, and a
+     <link rel="canonical"> from site_url. Only add a description fallback for
+     pages that don't define their own, to avoid duplicate tags. #}
+  {%- if not (page and page.meta and page.meta.description) %}
+  <meta name="description" content="{{ seo_desc | striptags | trim }}">
+  {%- endif %}
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <meta name="author" content="{{ config.site_author }}">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ config.site_name }}">
+  <meta property="og:title" content="{{ seo_title }}">
+  <meta property="og:description" content="{{ seo_desc | striptags | trim }}">
+  <meta property="og:url" content="{{ seo_url }}">
+  <meta property="og:image" content="{{ seo_image }}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:locale" content="en_IN">
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ seo_title }}">
+  <meta name="twitter:description" content="{{ seo_desc | striptags | trim }}">
+  <meta name="twitter:image" content="{{ seo_image }}">
+
+  {# Structured data: describe the software on the home page for rich results. #}
+  {%- if page and page.is_homepage %}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "bharat-courts",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Cross-platform (Python 3.11+)",
+    "description": {{ config.site_description | striptags | trim | tojson }},
+    "url": {{ config.site_url | tojson }},
+    "downloadUrl": "https://pypi.org/project/bharat-courts/",
+    "softwareHelp": {{ (config.site_url ~ "start/installation/") | tojson }},
+    "license": "https://opensource.org/licenses/MIT",
+    "isAccessibleForFree": true,
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "INR" },
+    "author": { "@type": "Person", "name": {{ config.site_author | tojson }} },
+    "codeRepository": {{ config.repo_url | tojson }}
+  }
+  </script>
+  {% endif -%}
+{% endblock %}
