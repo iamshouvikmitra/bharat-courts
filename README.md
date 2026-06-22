@@ -51,6 +51,28 @@ pip install bharat-courts[all]
 
 **Requires Python 3.11+**
 
+## Use with AI agents (Claude Code, Copilot, etc.)
+
+Install the bundled skill so your AI assistant can look up court data for you in natural language:
+
+```bash
+bharat-courts install-skills
+```
+
+Then just ask your AI agent:
+
+> "Find all pending writ petitions for Tata Motors in Delhi High Court from 2024"
+
+> "Download the latest order in WP(C) 4520/2023 before the Bombay High Court"
+
+> "What's on the cause list for Karnataka High Court tomorrow?"
+
+> "Search for cases filed by State of Bihar in Patna district court in 2024"
+
+> "Show me the most recent Supreme Court judgments from this week"
+
+The agent uses bharat-courts under the hood — handles CAPTCHA, sessions, and parsing automatically.
+
 ## Quick Start
 
 ### Find a judgment without picking a backend
@@ -254,28 +276,6 @@ Notes:
   30 days (`BHARAT_COURTS_ARCHIVE_METADATA_TTL_DAYS`).
 - **License**: data is CC-BY-4.0 — attribute Dattam Labs / the eCourts platform
   when redistributing.
-
-### Use with AI agents (Claude Code, Copilot, etc.)
-
-Install the bundled skill so your AI assistant can look up court data for you in natural language:
-
-```bash
-bharat-courts install-skills
-```
-
-Then just ask your AI agent:
-
-> "Find all pending writ petitions for Tata Motors in Delhi High Court from 2024"
-
-> "Download the latest order in WP(C) 4520/2023 before the Bombay High Court"
-
-> "What's on the cause list for Karnataka High Court tomorrow?"
-
-> "Search for cases filed by State of Bihar in Patna district court in 2024"
-
-> "Show me the most recent Supreme Court judgments from this week"
-
-The agent uses bharat-courts under the hood — handles CAPTCHA, sessions, and parsing automatically.
 
 ### JSON serialization
 
