@@ -169,7 +169,10 @@ def test_parse_cause_list(hcservices_cause_list_html):
     assert entry1.serial_number == 1
     assert "DIVISION BENCH" in entry1.bench
     assert entry1.cause_list_type == "COMPLETE CAUSE LIST"
-    assert "display_causelist_pdf.php" in entry1.pdf_url
+    assert entry1.pdf_url.startswith(
+        "https://hcservices.ecourts.gov.in/hcservices/cases/display_causelist_pdf.php?"
+    )
+    assert "/cases_qry/" not in entry1.pdf_url
 
     entry2 = results[1]
     assert entry2.serial_number == 2

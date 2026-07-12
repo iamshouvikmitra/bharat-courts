@@ -379,7 +379,9 @@ def parse_cause_list(html: str, base_url: str = "") -> list[CauseListPDF]:
             if href.startswith("http"):
                 pdf_url = href
             elif base_url:
-                pdf_url = f"{base_url}/cases_qry/{href}"
+                # hrefs like "cases/display_causelist_pdf.php?..." are relative
+                # to the /hcservices root (the main page), not cases_qry/
+                pdf_url = f"{base_url}/{href.lstrip('/')}"
             else:
                 pdf_url = href
 
