@@ -8,14 +8,11 @@ name: Live E2E monitor
 # works against live data, not just against fixtures.
 
 on:
-  # NOTE: the daily schedule is intentionally DISABLED for now. First validate
-  # with a manual `workflow_dispatch` run from the Actions tab — GitHub's shared
-  # runner IPs may be rate-limited or blocked by the eCourts portals, which
-  # would make the CAPTCHA-gated backends fail for reasons unrelated to the SDK.
-  # Once a manual run is green, uncomment the `schedule` block to go periodic.
-  #
-  # schedule:
-  #   - cron: "30 1 * * *" # daily 01:30 UTC ≈ 07:00 IST
+  # Validated 2026-07-15 with manual workflow_dispatch runs: all four backends
+  # green from GitHub's runner IPs (not blocked by the eCourts portals), so the
+  # daily schedule is enabled below. Keep workflow_dispatch for on-demand runs.
+  schedule:
+    - cron: "30 1 * * *" # daily 01:30 UTC ≈ 07:00 IST
   workflow_dispatch: {}
 
 # Never cancel an in-flight monitor run; let each finish so issue state stays
