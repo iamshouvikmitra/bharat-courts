@@ -181,7 +181,7 @@ async def test_list_case_types():
 
 async def test_case_status_by_party():
     """Test 5: Case status search by party name (CAPTCHA)."""
-    t = TestResult("Case Status by Party (Bihar/Patna, 'state', 2024)")
+    t = TestResult("Case Status by Party (Bihar/Patna, 'Union of India', 2024)")
     try:
         from bharat_courts.districtcourts.client import DistrictCourtClient
         from bharat_courts.districtcourts.parser import parse_complex_value
@@ -198,12 +198,17 @@ async def test_case_status_by_party():
             complex_code, ests, needs_est = parse_complex_value(complex_val)
             est_code = ests[0] if ests and needs_est else ""
 
+            # NB: use a specific party name, not a generic word like "state".
+            # Over-broad terms match tens of thousands of rows and the eCourts
+            # server times out generating them (ReadTimeout ~190s), which looks
+            # like an SDK failure but is really a degenerate query. "Union of
+            # India" is a party to a bounded, always-present set of cases.
             cases = await client.case_status_by_party(
                 state_code="8",
                 dist_code="1",
                 court_complex_code=complex_code,
                 est_code=est_code,
-                party_name="state",
+                party_name="Union of India",
                 year="2024",
             )
 

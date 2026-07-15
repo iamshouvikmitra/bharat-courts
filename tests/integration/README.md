@@ -46,3 +46,20 @@ triggered CI job.
   `bharat_courts/facade.py`, or a portal client.
 - When a user reports a flake — re-run to reproduce against current
   portal state.
+
+## Scheduled monitor (CI)
+
+`.github/workflows/live-e2e.yml` runs these same four scripts on GitHub
+Actions — one job per backend — and opens (or updates) a GitHub issue
+labelled `live-e2e-failure` + `backend:<name>` when a backend breaks, then
+auto-closes it on recovery. This is the public "the SDK works against live
+data" signal.
+
+The daily `schedule` trigger is **commented out** on purpose: run it manually
+via **Actions → Live E2E monitor → Run workflow** first, because GitHub's
+shared runner IPs may be rate-limited/blocked by the eCourts portals (which
+would fail the CAPTCHA-gated backends for reasons unrelated to the SDK). Once
+a manual run is green, uncomment the `schedule` block to go periodic.
+
+Each script has a hard `timeout-minutes` cap so a hung portal can't burn CI
+minutes.

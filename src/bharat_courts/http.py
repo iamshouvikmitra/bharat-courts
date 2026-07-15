@@ -121,7 +121,19 @@ class RateLimitedClient:
                     wait,
                 )
                 await asyncio.sleep(wait)
-            except (httpx.ConnectError, httpx.ReadTimeout) as e:
+            except (
+                httpx.TimeoutException,  # Read/Connect/Write/Pool timeouts
+                httpx.NetworkError,  # Connect/Read/Write/Close errors
+                httpx.RemoteProtocolError,  # server disconnected mid-response
+            ) as e:
+                # The eCourts portals routinely drop connections under load
+                # ("Server disconnected without sending a response") — that
+                # surfaces as RemoteProtocolError, which is NOT a ConnectError
+                # or ReadTimeout, so it previously escaped the retry loop and
+                # failed the whole query on the first blip. Retry all transient
+                # transport failures; LocalProtocolError / UnsupportedProtocol /
+                # ProxyError are excluded (they're our bug or config, not the
+                # server being flaky).
                 last_error = e
                 if attempt == self._config.max_retries - 1:
                     raise

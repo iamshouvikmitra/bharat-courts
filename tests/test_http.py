@@ -74,6 +74,49 @@ async def test_retry_on_error(fast_config):
 
 
 @pytest.mark.asyncio
+async def test_retry_on_remote_protocol_error(fast_config):
+    """Server disconnects (RemoteProtocolError) are transient and must retry.
+
+    The eCourts portals drop connections mid-response under load; that raises
+    httpx.RemoteProtocolError, which is neither ConnectError nor ReadTimeout.
+    It must still be retried, not propagated on the first blip.
+    """
+    import httpx
+
+    with respx.mock:
+        route = respx.post("https://example.com/party")
+        route.side_effect = [
+            httpx.RemoteProtocolError("Server disconnected without sending a response."),
+            Response(200, text="recovered"),
+        ]
+
+        async with RateLimitedClient(fast_config) as client:
+            resp = await client.post("https://example.com/party", data={"q": "x"})
+            assert resp.text == "recovered"
+        assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_on_connect_and_read_timeout(fast_config):
+    """ConnectError and ReadTimeout remain covered by the broadened catch."""
+    import httpx
+
+    for exc in (
+        httpx.ConnectError("conn refused"),
+        httpx.ReadTimeout("read timed out"),
+        httpx.PoolTimeout("pool timed out"),
+    ):
+        with respx.mock:
+            route = respx.get("https://example.com/flaky")
+            route.side_effect = [exc, Response(200, text="ok")]
+
+            async with RateLimitedClient(fast_config) as client:
+                resp = await client.get("https://example.com/flaky")
+                assert resp.text == "ok"
+            assert route.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_max_retries_exceeded(fast_config):
     with respx.mock:
         respx.get("https://example.com/down").mock(return_value=Response(500))
