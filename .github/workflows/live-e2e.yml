@@ -1,0 +1,213 @@
+name: Live E2E monitor
+
+# Dogfoods bharat-courts against the real eCourts portals + AWS Open Data
+# buckets on a schedule. If a backend breaks (portal changes shape, PDF path
+# moves, S3 schema drifts, CAPTCHA solver regresses), the job opens — or
+# updates — a GitHub issue for that backend, and auto-closes it once the
+# backend is healthy again. This is the public signal that the SDK actually
+# works against live data, not just against fixtures.
+
+on:
+  # NOTE: the daily schedule is intentionally DISABLED for now. First validate
+  # with a manual `workflow_dispatch` run from the Actions tab — GitHub's shared
+  # runner IPs may be rate-limited or blocked by the eCourts portals, which
+  # would make the CAPTCHA-gated backends fail for reasons unrelated to the SDK.
+  # Once a manual run is green, uncomment the `schedule` block to go periodic.
+  #
+  # schedule:
+  #   - cron: "30 1 * * *" # daily 01:30 UTC ≈ 07:00 IST
+  workflow_dispatch: {}
+
+# Never cancel an in-flight monitor run; let each finish so issue state stays
+# consistent. Runs are ~daily so overlap is unlikely anyway.
+concurrency:
+  group: live-e2e
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  e2e:
+    name: ${{ matrix.backend }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # whole-job backstop (install + run + reporting)
+    strategy:
+      fail-fast: false # one flaky portal must not mask the others
+      matrix:
+        include:
+          # run_timeout is a HARD per-script cap (minutes) so a hung portal can
+          # never burn Actions minutes. Sized ~10x the local benchmark to leave
+          # slack for slower CI runners; the job-level timeout is the backstop.
+          - backend: archive
+            script: tests/integration/archive.py
+            hits: AWS Open Data S3 (SCI + 25 HCs)
+            run_timeout: 8
+          - backend: hcservices
+            script: tests/integration/hcservices.py
+            hits: hcservices.ecourts.gov.in (CAPTCHA-gated)
+            run_timeout: 8
+          - backend: districtcourts
+            script: tests/integration/districtcourts.py
+            hits: services.ecourts.gov.in (CAPTCHA-gated)
+            run_timeout: 8
+          - backend: calcuttahc
+            script: tests/integration/calcuttahc_wpa_12886.py
+            hits: calcuttahighcourt.gov.in + judgments.ecourts.gov.in
+            run_timeout: 8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Install the repo itself (editable) with every extra — this is the
+      # "use our own lib" part: the monitor exercises the same package users
+      # install, end to end, against live data.
+      - name: Install bharat-courts[all]
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[all]"
+
+      # Run the backend's live integration script. It prints PASS/FAIL per
+      # check and exits non-zero on any failure. We capture the exit code and
+      # the full log WITHOUT failing the step, so the reporting step below can
+      # always run and manage the issue.
+      - name: Run live E2E — ${{ matrix.backend }}
+        id: run
+        timeout-minutes: ${{ matrix.run_timeout }} # HARD per-script cap
+        run: |
+          set +e
+          mkdir -p e2e-logs
+          python "${{ matrix.script }}" 2>&1 | tee "e2e-logs/${{ matrix.backend }}.log"
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -eq 0 ]; then
+            echo "outcome=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "outcome=fail" >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-log-${{ matrix.backend }}
+          path: e2e-logs/${{ matrix.backend }}.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Open / update / close the per-backend tracking issue based on outcome.
+      # De-duped by the (live-e2e-failure, backend:<name>) label pair, so a
+      # broken backend accumulates comments on ONE issue instead of spawning a
+      # new one every day. On recovery, the open issue is commented + closed.
+      - name: Sync tracking issue
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          BACKEND: ${{ matrix.backend }}
+          HITS: ${{ matrix.hits }}
+          OUTCOME: ${{ steps.run.outputs.outcome }}
+          EXIT_CODE: ${{ steps.run.outputs.exit_code }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const backend = process.env.BACKEND;
+            const hits = process.env.HITS;
+            const outcome = process.env.OUTCOME || 'fail'; // no outcome ⇒ setup/install broke ⇒ failure
+            const runUrl = process.env.RUN_URL;
+            const failed = outcome !== 'pass';
+
+            const FAIL_LABEL = 'live-e2e-failure';
+            const BACKEND_LABEL = `backend:${backend}`;
+            const title = `🔴 Live E2E failing: ${backend}`;
+
+            // Log tail (last ~80 lines, capped) for the issue body/comment.
+            let tail = '(no log captured)';
+            try {
+              const raw = fs.readFileSync(`e2e-logs/${backend}.log`, 'utf8');
+              tail = raw.split('\n').slice(-80).join('\n').slice(-5500) || tail;
+            } catch (_) {}
+
+            const now = new Date().toISOString();
+
+            // Find an existing open tracking issue for this backend.
+            const existing = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: `${FAIL_LABEL},${BACKEND_LABEL}`,
+              per_page: 100,
+            });
+            const issue = existing[0];
+
+            const detailsBlock =
+              `<details><summary>Log tail (run: ${runUrl})</summary>\n\n` +
+              '```\n' + tail + '\n```\n</details>';
+
+            if (failed) {
+              const bodyHeader =
+                `**Backend:** \`${backend}\` — ${hits}\n` +
+                `**Detected:** ${now}\n` +
+                `**Exit code:** ${process.env.EXIT_CODE || 'n/a'}\n\n` +
+                `The scheduled live end-to-end check for the \`${backend}\` backend failed. ` +
+                `This means the SDK could not complete a real query against the live source. ` +
+                `Likely causes: the portal changed its HTML/JSON shape, a PDF path moved, ` +
+                `the S3 schema drifted, the CAPTCHA solver regressed, or the source is ` +
+                `temporarily down / blocking CI IPs.\n\n` +
+                `_Auto-filed by the Live E2E monitor. It will auto-close when \`${backend}\` passes again._`;
+
+              if (issue) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `🔴 Still failing as of ${now}.\n\n${detailsBlock}`,
+                });
+                core.info(`Updated existing issue #${issue.number} for ${backend}`);
+              } else {
+                const created = await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title,
+                  labels: [FAIL_LABEL, BACKEND_LABEL],
+                  body: `${bodyHeader}\n\n${detailsBlock}`,
+                });
+                core.info(`Opened issue #${created.data.number} for ${backend}`);
+              }
+            } else if (issue) {
+              // Recovered: comment + close the open tracking issue.
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `✅ \`${backend}\` live E2E passed again as of ${now} — auto-closing.\n\nRun: ${runUrl}`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'completed',
+              });
+              core.info(`Closed recovered issue #${issue.number} for ${backend}`);
+            } else {
+              core.info(`${backend} healthy, no open issue — nothing to do.`);
+            }
+
+      # Make the job itself red when the backend failed, so the Actions tab and
+      # any branch/status badges reflect reality (the issue is the notification,
+      # this is the at-a-glance signal).
+      - name: Reflect status
+        if: always()
+        run: |
+          if [ "${{ steps.run.outputs.outcome }}" != "pass" ]; then
+            echo "::error::${{ matrix.backend }} live E2E failed (exit ${{ steps.run.outputs.exit_code }})"
+            exit 1
+          fi
