@@ -190,6 +190,53 @@ class Judgment(_Serializable):
 
 
 @dataclass
+class AdvocateSearch(_Serializable):
+    """An advocate search, with the advocate the portal resolved it to.
+
+    The response envelope echoes back who it matched — a bar code of
+    ``G/504/2011`` is answered with ``adv_name: "MR. HEMAL SHAH(6960)"`` —
+    and that echo is the only confirmation available that a bar code is real.
+    Nothing else validates one: the portal's own form takes the state part as
+    free text on both High Court and district, so a wrong code is not an
+    error, just a search that finds nothing.
+
+    ``code`` is the portal's internal advocate id, **not** a bar number and
+    not accepted as one.
+    """
+
+    #: As echoed, e.g. ``"MR. HEMAL SHAH(6960)"``. Empty when nothing matched.
+    raw_name: str = ""
+    #: The name with the bracketed id removed, e.g. ``"MR. HEMAL SHAH"``.
+    name: str = ""
+    #: The bracketed id, e.g. ``"6960"``. Absent on older district records.
+    code: str = ""
+    total_records: int = 0
+    cases: list[CaseInfo] = field(default_factory=list)
+
+    @property
+    def found(self) -> bool:
+        """Whether the portal recognised the advocate.
+
+        True even with no cases: an advocate can exist and have nothing
+        pending, and telling that apart from a mistyped bar code is the
+        whole point of this class.
+        """
+        return bool(self.raw_name)
+
+    def to_dict(self, *, exclude_none: bool = False) -> dict[str, Any]:
+        """Override to carry ``found`` through serialization.
+
+        It is a property, so the field-walking base implementation would drop
+        the one flag this class exists to expose and leave every JSON
+        consumer recomputing it. Same reason :class:`SearchResult` overrides
+        for ``total_pages``.
+        """
+        result = super().to_dict(exclude_none=exclude_none)
+        result["found"] = self.found
+        return result
+
+
+@dataclass
 class PartyEntry(_Serializable):
     """A party to a case, with the advocate(s) appearing for them."""
 

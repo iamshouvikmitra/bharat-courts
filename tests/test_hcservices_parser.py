@@ -1,13 +1,19 @@
 """Tests for HC Services parsers (JSON + HTML)."""
 
+import json
 from datetime import date
+from unittest import mock
 
 import pytest
 
+from bharat_courts.hcservices import parser
 from bharat_courts.hcservices.parser import (
     CaptchaError,
+    ServerError,
     dedupe_by_cnr,
+    is_captcha_rejection,
     parse_advocate_cause_list,
+    parse_advocate_search,
     parse_case_status,
     parse_cause_list,
     parse_orders,
@@ -257,3 +263,107 @@ def test_advocate_cause_list_carries_both_dates(hcservices_advocate_cause_list_j
     assert first.listing_date == date(2026, 8, 17)
     assert first.business_date == date(2026, 8, 13)
     assert first.listing_date != first.business_date
+
+
+# The envelope echoes back who the portal matched, and nothing else confirms
+# a bar code: both portals take its state part as free text, so a wrong one
+# is a search that finds nothing rather than an error.
+def test_advocate_search_keeps_who_the_portal_matched(hcservices_advocate_search_json):
+    result = parse_advocate_search(hcservices_advocate_search_json)
+    assert result.found is True
+    assert result.raw_name == "PRIYA SHARMA"
+    assert result.total_records == 2
+    assert len(result.cases) == 2
+
+
+def test_a_bracketed_id_is_split_off_the_name():
+    raw = json.dumps({"con": ["[]"], "totRecords": 0, "adv_name": "MR. HEMAL SHAH(6960)"})
+    result = parse_advocate_search(raw)
+    assert result.name == "MR. HEMAL SHAH"
+    # The portal's internal advocate id — not a bar number, and not accepted
+    # as one.
+    assert result.code == "6960"
+
+
+# An advocate with nothing pending is not a bad bar code, and the two need
+# different words in front of a lawyer who has just signed up.
+def test_found_with_no_cases_is_distinguishable_from_not_found():
+    empty = parse_advocate_search(json.dumps({"con": ["[]"], "adv_name": ""}))
+    assert empty.found is False
+
+    quiet = parse_advocate_search(json.dumps({"con": ["[]"], "adv_name": "MR. SOMEONE(1)"}))
+    assert quiet.found is True
+    assert quiet.cases == []
+
+
+# The envelope is where the echo lives, so this parser has to read it through
+# the same helper as its siblings — a bare json.loads crashes on responses
+# they absorb, and callers watching for CaptchaError/ServerError would get a
+# raw JSONDecodeError instead.
+@pytest.mark.parametrize(
+    "label,raw",
+    [
+        ("session-expired HTML", "<html><table><tr><td>Session expired</td></tr></table></html>"),
+        ("control char in the name", '{"con":["[]"],"totRecords":"0","adv_name":"MR. X\x01(1)"}'),
+        ("BOM behind whitespace", '  ﻿{"con":["[]"],"totRecords":"0","adv_name":"MR. X(1)"}'),
+    ],
+)
+def test_odd_responses_survive_like_they_do_in_case_status(label, raw):
+    parse_case_status(raw)  # the sibling absorbs it; so must this one
+    assert parse_advocate_search(raw).cases == []
+
+
+def test_a_reworded_captcha_rejection_still_raises_captcha_error():
+    # The portal's wording has drifted before, so the envelope matches any
+    # `con` string mentioning a captcha rather than one literal phrase.
+    with pytest.raises(CaptchaError):
+        parse_advocate_search('{"con":"Wrong Captcha"}')
+
+
+def test_a_server_error_raises_rather_than_reading_as_not_found():
+    # ERROR_VAL must not arrive as found=False — it is ambiguous between a
+    # bad bar code and a transient refusal, and only the caller can retry.
+    with pytest.raises(ServerError):
+        parse_advocate_search('{"con":[],"totRecords":"0","Error":"ERROR_VAL"}')
+
+
+def test_the_response_is_decoded_once_not_twice(hcservices_advocate_search_json):
+    # A live bar code answers with thousands of rows over several MB, so the
+    # envelope must be parsed once and shared with the row mapping.
+    with mock.patch.object(parser.json, "loads", side_effect=json.loads) as loads:
+        parse_advocate_search(hcservices_advocate_search_json)
+    envelope_and_inner = 2
+    assert loads.call_count == envelope_and_inner
+
+
+# The retry loop quick-checks the response instead of parsing several MB, so
+# its verdict has to be the one _parse_json_envelope would reach. A rejection
+# it misses is a CaptchaError raised on attempt 1 with four retries unused.
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"con":"Invalid Captcha"}',
+        '{"con": "Invalid Captcha"}',
+        '{"con":"Wrong Captcha"}',
+        '{"con":"invalid captcha, try again"}',
+        '\ufeff{"con":"Invalid Captcha"}',
+    ],
+)
+def test_captcha_rejections_are_recognised_without_a_full_parse(raw):
+    assert is_captcha_rejection(raw) is True
+    with pytest.raises(CaptchaError):
+        parse_case_status(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"con":["[{\\"cino\\": \\"GJHC240100012024\\"}]"],"totRecords":"1"}',
+        '{"con":[],"totRecords":"0","Error":""}',
+        # A captcha mentioned inside the rows is data, not a rejection.
+        '{"con":["[{\\"pet_name\\": \\"CAPTCHA SOLUTIONS PVT LTD\\"}]"],"totRecords":"1"}',
+        '{"con":[],"Error":"ERROR_VAL"}',
+    ],
+)
+def test_successful_responses_are_not_read_as_captcha_rejections(raw):
+    assert is_captcha_rejection(raw) is False

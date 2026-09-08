@@ -23,6 +23,7 @@ from bharat_courts.http import RateLimitedClient
 from bharat_courts.judgments.client import JudgmentSearchClient
 from bharat_courts.models import (
     ActEntry,
+    AdvocateSearch,
     CaseDetail,
     CaseInfo,
     CaseOrder,
@@ -42,6 +43,7 @@ __all__ = [
     "parse_case_detail",
     "PartyEntry",
     "HearingEntry",
+    "AdvocateSearch",
     "CaseDetail",
     "ActEntry",
     "__version__",

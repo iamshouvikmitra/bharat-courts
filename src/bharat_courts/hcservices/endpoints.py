@@ -122,6 +122,20 @@ def case_status_by_party_form(
     }
 
 
+def validate_advocate_query(advocate_name: str | None, bar_code: str | None) -> None:
+    """Raise unless exactly one of advocate name / bar code is given.
+
+    Split out of :func:`case_status_by_advocate_form` so the client can check
+    before spending a session and a CAPTCHA solve — with a manual solver that
+    is a human waiting at a prompt — on a request that cannot be built.
+
+    Raises:
+        ValueError: If neither or both are given.
+    """
+    if bool(advocate_name) == bool(bar_code):
+        raise ValueError("pass exactly one of advocate_name or bar_code")
+
+
 def case_status_by_advocate_form(
     *,
     state_code: str,
@@ -156,8 +170,7 @@ def case_status_by_advocate_form(
     Raises:
         ValueError: If neither or both of advocate_name / bar_code are given.
     """
-    if bool(advocate_name) == bool(bar_code):
-        raise ValueError("pass exactly one of advocate_name or bar_code")
+    validate_advocate_query(advocate_name, bar_code)
 
     form = {
         "court_code": court_code,

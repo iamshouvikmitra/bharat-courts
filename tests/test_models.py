@@ -1,8 +1,10 @@
 """Tests for data models."""
 
+import json
 from datetime import date
 
 from bharat_courts.models import (
+    AdvocateSearch,
     CaseInfo,
     CaseOrder,
     CauseListEntry,
@@ -70,3 +72,13 @@ def test_search_result_total_pages():
 
     r4 = SearchResult(total_count=10, page_size=0)
     assert r4.total_pages == 0
+
+
+def test_advocate_search_found_survives_serialization():
+    # `found` is a property, so the field-walking base to_dict would drop the
+    # one flag the class exists to expose and every JSON consumer would have
+    # to recompute it.
+    a = AdvocateSearch(raw_name="MR. HEMAL SHAH(6960)", name="MR. HEMAL SHAH", code="6960")
+    assert a.to_dict()["found"] is True
+    assert json.loads(a.to_json())["found"] is True
+    assert AdvocateSearch().to_dict()["found"] is False

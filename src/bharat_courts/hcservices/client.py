@@ -25,13 +25,16 @@ from bharat_courts.config import config as default_config
 from bharat_courts.hcservices import endpoints
 from bharat_courts.hcservices.parser import (
     CaptchaError,
+    is_captcha_rejection,
     parse_advocate_cause_list,
+    parse_advocate_search,
     parse_case_status,
     parse_cause_list,
     parse_orders,
 )
 from bharat_courts.http import RateLimitedClient
 from bharat_courts.models import (
+    AdvocateSearch,
     CaseDetail,
     CaseInfo,
     CaseOrder,
@@ -136,9 +139,11 @@ class HCServicesClient:
                 data=form,
                 headers={"Referer": endpoints.MAIN_PAGE_URL},
             )
-            # Quick-check for captcha error before full parse
-            text = resp.text.strip().lstrip("\ufeff")
-            if '"Invalid Captcha"' in text or '"con":"Invalid Captcha"' in text:
+            # Quick-check for captcha error before full parse. Uses the same
+            # condition the parser raises CaptchaError on, so a reworded
+            # rejection is retried here rather than escaping as an exception
+            # with every remaining attempt unused.
+            if is_captcha_rejection(resp.text):
                 logger.warning("CAPTCHA attempt %d failed (invalid)", attempt + 1)
                 continue
             return resp
@@ -262,7 +267,63 @@ class HCServicesClient:
 
         Raises:
             ValueError: If neither or both of advocate_name / bar_code given.
+
+        See also:
+            :meth:`advocate_search`, the same request kept whole. This is a
+            thin view over it — call that one directly if you also need to
+            know *whether* the portal recognised the advocate, rather than
+            spending a second session and CAPTCHA solve to find out.
         """
+        result = await self.advocate_search(
+            court,
+            advocate_name=advocate_name,
+            bar_code=bar_code,
+            bench_code=bench_code,
+            status_filter=status_filter,
+        )
+        return result.cases
+
+    async def advocate_search(
+        self,
+        court: Court,
+        *,
+        advocate_name: str | None = None,
+        bar_code: str | None = None,
+        bench_code: str = "1",
+        status_filter: str = "Both",
+    ) -> AdvocateSearch:
+        """Search an advocate's cases, keeping who the portal matched.
+
+        The whole of the :meth:`case_status_by_advocate` request — that
+        method is now a view over this one, returning only ``.cases`` — so
+        the advocate the portal resolved the query to survives alongside the
+        cases: ``G/504/2011`` comes back as ``MR. HEMAL SHAH(6960)``.
+
+        That echo is the positive confirmation a bar code is real, and it is
+        worth having because "you have no pending matters" reads very
+        differently from "that bar number does not exist" to someone who has
+        just signed up.
+
+        Measured live: ``G/504/2011`` answered ``found=True``,
+        ``name="MR. HEMAL SHAH"``, ``code="6960"``, 2,704 rows, while
+        ``G/999999/1999`` raised ``ServerError: ERROR_VAL``.
+
+        **The negative signal is ambiguous, though.** ``ERROR_VAL`` is also
+        what a transient refusal looks like — a seeding run saw two dates
+        fail that had answered minutes earlier — so a single error does not
+        prove a bar code wrong. Retry before telling a lawyer their number is
+        invalid; only ``.found`` is unambiguous.
+
+        Returns:
+            An :class:`AdvocateSearch`. Check ``.found`` before ``.cases``.
+
+        Raises:
+            ValueError: If neither or both of advocate_name / bar_code given.
+        """
+        # Before the session and the CAPTCHA solve, not inside the retry
+        # loop's form_builder — a manual solver blocks on a human at that
+        # point, and the request was never going to be buildable.
+        endpoints.validate_advocate_query(advocate_name, bar_code)
 
         def build_form(captcha: str) -> dict:
             return endpoints.case_status_by_advocate_form(
@@ -275,10 +336,10 @@ class HCServicesClient:
             )
 
         resp = await self._post_with_captcha_retry(endpoints.SHOW_RECORDS_URL, build_form)
-        results = parse_case_status(resp.text)
-        for r in results:
+        result = parse_advocate_search(resp.text)
+        for r in result.cases:
             r.court_name = court.name
-        return results
+        return result
 
     async def advocate_cause_list(
         self,

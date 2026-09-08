@@ -20,7 +20,13 @@ from datetime import date, datetime
 
 from bs4 import BeautifulSoup, Tag
 
-from bharat_courts.models import CaseInfo, CaseOrder, CauseListEntry, CauseListPDF
+from bharat_courts.models import (
+    AdvocateSearch,
+    CaseInfo,
+    CaseOrder,
+    CauseListEntry,
+    CauseListPDF,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +76,17 @@ class ServerError(Exception):
     """Raised on a non-empty Error field from the server."""
 
 
-def _parse_json_envelope(raw: str) -> tuple[list[dict], int]:
+def _parse_json_envelope(raw: str) -> tuple[list[dict], int, dict]:
     """Parse the outer JSON envelope from showRecords responses.
 
+    The envelope itself is returned alongside the rows because some searches
+    keep more than the rows — an advocate search reads ``adv_name`` off it —
+    and a second :func:`json.loads` would both double the parse cost on a
+    multi-MB response and skip the leniency below.
+
     Returns:
-        (records_list, total_count).
+        (records_list, total_count, envelope). The envelope is ``{}`` when
+        the response was not JSON at all.
 
     Raises:
         CaptchaError: If the captcha was wrong.
@@ -98,7 +110,7 @@ def _parse_json_envelope(raw: str) -> tuple[list[dict], int]:
             raise ServerError(err)
 
         con = data.get("con")
-        total = int(data.get("totRecords", 0))
+        total = int(data.get("totRecords") or 0)
 
         if isinstance(con, list) and con:
             # con is a list of JSON-encoded strings
@@ -108,16 +120,37 @@ def _parse_json_envelope(raw: str) -> tuple[list[dict], int]:
                     records = json.loads(inner, strict=False)
                 except json.JSONDecodeError:
                     logger.warning("Could not parse inner con JSON")
-                    return [], total
+                    return [], total, data
             elif isinstance(inner, dict):
                 records = [inner]
             else:
                 records = []
-            return records if isinstance(records, list) else [], total
-        return [], total
+            return records if isinstance(records, list) else [], total, data
+        return [], total, data
 
     # Not JSON at all
-    return [], 0
+    return [], 0, {}
+
+
+#: ``{"con": "Invalid Captcha"}`` — but the wording drifts, so match any
+#: ``con`` *string* mentioning a captcha, which is exactly what
+#: :func:`_parse_json_envelope` raises :class:`CaptchaError` on. A successful
+#: response carries ``"con": [...]``, a list, so it can never match.
+_CAPTCHA_REJECTION_RE = re.compile(r'"con"\s*:\s*"[^"]*captcha', re.IGNORECASE)
+
+
+def is_captcha_rejection(raw: str) -> bool:
+    """Whether a showRecords response is the server refusing the CAPTCHA.
+
+    The retry loop needs this verdict without paying for a full parse — a
+    live advocate search answers with several MB — and it has to agree with
+    :func:`_parse_json_envelope`. A quick-check that knows only the literal
+    "Invalid Captcha" lets a reworded rejection through as a success; the
+    parse then raises :class:`CaptchaError` on the first attempt with every
+    remaining retry unused, and this portal's error wording has drifted
+    before.
+    """
+    return bool(_CAPTCHA_REJECTION_RE.search(raw))
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +174,17 @@ def parse_case_status(raw: str) -> list[CaseInfo]:
     if "<table" in raw.lower():
         return _parse_case_status_html(raw)
 
-    records, total = _parse_json_envelope(raw)
+    records, total, _ = _parse_json_envelope(raw)
+    return _case_infos_from_records(records, total)
+
+
+def _case_infos_from_records(records: list[dict], total: int) -> list[CaseInfo]:
+    """Map already-parsed showRecords rows to :class:`CaseInfo`.
+
+    Split out of :func:`parse_case_status` so a caller that has already
+    parsed the envelope (see :func:`parse_advocate_search`) can reuse the
+    mapping without decoding the response a second time.
+    """
     results = []
     for rec in records:
         case_no2 = str(rec.get("case_no2", ""))
@@ -162,6 +205,46 @@ def parse_case_status(raw: str) -> list[CaseInfo]:
 
     logger.info("Parsed %d/%d case status records", len(results), total)
     return results
+
+
+#: "MR. HEMAL SHAH(6960)" — name, then the portal's internal advocate id.
+_ADV_ECHO_RE = re.compile(r"^(.*?)\s*\((\d+)\)\s*$")
+
+
+def parse_advocate_search(raw: str) -> AdvocateSearch:
+    """Parse an advocate search, keeping the advocate the portal matched.
+
+    :func:`parse_case_status` discards the envelope, which is where the only
+    confirmation of a bar code lives. Nothing else validates one — the
+    portal's form takes the state part as free text on both High Court and
+    district — so a mistyped code is not an error, just a search that finds
+    nothing. The echo is what separates "this advocate has no pending
+    matters" from "this bar code does not exist", and those need different
+    words in front of a lawyer who has just signed up.
+
+    Goes through :func:`_parse_json_envelope` like its siblings, so it
+    inherits their handling of session-expired HTML, control characters in
+    names, and a BOM behind leading whitespace — and parses the response
+    once, which matters when a live bar code answers with thousands of rows.
+    """
+    # An HTML table means the portal answered with a page rather than the
+    # JSON envelope, so there is no echo to keep — only the rows.
+    if "<table" in raw.lower():
+        return AdvocateSearch(cases=_parse_case_status_html(raw))
+
+    records, total, envelope = _parse_json_envelope(raw)
+    echoed = _clean_text(envelope.get("adv_name") or "")
+    name, code = echoed, ""
+    m = _ADV_ECHO_RE.match(echoed)
+    if m:
+        name, code = m.group(1).strip(), m.group(2)
+    return AdvocateSearch(
+        raw_name=echoed,
+        name=name,
+        code=code,
+        total_records=total,
+        cases=_case_infos_from_records(records, total),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +277,7 @@ def parse_advocate_cause_list(raw: str) -> list[CauseListEntry]:
     No item/serial number is returned — that lives only in the cause list
     PDF, so :attr:`CauseListEntry.item_number` is left empty here.
     """
-    records, total = _parse_json_envelope(raw)
+    records, total, _ = _parse_json_envelope(raw)
     results = []
     for rec in records:
         case_no2 = str(rec.get("case_no2", ""))
@@ -322,7 +405,7 @@ def parse_orders(
     stripped = raw.strip().lstrip("\ufeff")
     if not stripped.startswith("<"):
         try:
-            records, _ = _parse_json_envelope(stripped)
+            records, _, _ = _parse_json_envelope(stripped)
             return _orders_from_json(records, base_url, bench_code, state_code)
         except Exception:
             pass  # Fall through to HTML parsing
