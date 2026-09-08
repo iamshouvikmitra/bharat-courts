@@ -23,9 +23,9 @@ it to each method:
 ```python
 from bharat_courts import get_court
 
-court = get_court("delhi")     # or "bombay", "calcutta", "madras", ...
-print(court.name)              # "Delhi High Court"
-print(court.state_code)        # "26"
+court = get_court("delhi")  # or "bombay", "calcutta", "madras", ...
+print(court.name)  # "Delhi High Court"
+print(court.state_code)  # "26"
 ```
 
 ### Available High Courts
@@ -146,8 +146,8 @@ async def main():
         cases = await client.case_status_by_party(
             court,
             party_name="state",
-            year="2024",            # mandatory — omitting it returns ERROR_VAL
-            status_filter="Both",   # "Pending", "Disposed", or "Both"
+            year="2024",  # mandatory — omitting it returns ERROR_VAL
+            status_filter="Both",  # "Pending", "Disposed", or "Both"
         )
         for c in cases:
             print(f"{c.case_number}  {c.petitioner} vs {c.respondent}")
@@ -235,7 +235,7 @@ async def main():
         pdfs = await client.cause_list(
             court,
             civil=True,
-            causelist_date="24-06-2026",   # DD-MM-YYYY; omit for today
+            causelist_date="24-06-2026",  # DD-MM-YYYY; omit for today
         )
         for entry in pdfs:
             print(f"{entry.serial_number}  {entry.bench}  {entry.cause_list_type}")

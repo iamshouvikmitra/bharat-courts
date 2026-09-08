@@ -121,12 +121,13 @@ async Python:
 import asyncio
 from bharat_courts import Judgments
 
+
 async def main():
     async with Judgments() as j:
-        results = await j.find(judge="chandrachud", year=(2018, 2024),
-                               court="sci", limit=10)
+        results = await j.find(judge="chandrachud", year=(2018, 2024), court="sci", limit=10)
         for r in results:
             print(r.decision_date, r.case_id, r.title)
+
 
 asyncio.run(main())
 ```
@@ -149,12 +150,11 @@ as one of its tools. The natural wrapper is the federated `find` entry point:
 import asyncio
 from bharat_courts import Judgments
 
-async def find_indian_judgments(text=None, judge=None, court=None,
-                                year=None, cnr=None, limit=10):
+
+async def find_indian_judgments(text=None, judge=None, court=None, year=None, cnr=None, limit=10):
     """Tool: find Indian court judgments (archive + live eCourts)."""
     async with Judgments() as j:
-        results = await j.find(text=text, judge=judge, court=court,
-                               year=year, cnr=cnr, limit=limit)
+        results = await j.find(text=text, judge=judge, court=court, year=year, cnr=cnr, limit=limit)
         return [r.to_dict(exclude_none=True) for r in results]
 ```
 

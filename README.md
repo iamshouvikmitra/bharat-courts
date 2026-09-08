@@ -83,6 +83,7 @@ The `Judgments` facade is the recommended entry point for "find a judgment match
 import asyncio
 from bharat_courts import Judgments
 
+
 async def main():
     async with Judgments() as j:
         # Structured filters → archive (no CAPTCHA, partition-pruned)
@@ -101,6 +102,7 @@ async def main():
 
         # Force a specific backend if you need to
         archive_only = await j.find(text="bail", source="archive", limit=5)
+
 
 asyncio.run(main())
 ```
@@ -123,6 +125,7 @@ import asyncio
 from bharat_courts import get_court, HCServicesClient
 from bharat_courts.captcha.ocr import OCRCaptchaSolver
 
+
 async def main():
     delhi = get_court("delhi")
     solver = OCRCaptchaSolver()
@@ -137,6 +140,7 @@ async def main():
         for case in cases:
             print(f"{case.case_number}: {case.petitioner} v {case.respondent}")
             print(f"  CNR: {case.cnr_number}")
+
 
 asyncio.run(main())
 ```
@@ -180,7 +184,7 @@ async with HCServicesClient(captcha_solver=solver) as client:
 pdfs = await client.cause_list(
     get_court("delhi"),
     civil=True,
-    causelist_date="03-03-2026",   # DD-MM-YYYY
+    causelist_date="03-03-2026",  # DD-MM-YYYY
 )
 for pdf in pdfs:
     print(f"{pdf.bench} — {pdf.cause_list_type}")
@@ -195,11 +199,11 @@ from bharat_courts.districtcourts.parser import parse_complex_value
 
 async with DistrictCourtClient(captcha_solver=solver) as client:
     # Discover the court hierarchy
-    districts = await client.list_districts("8")        # Bihar
-    complexes = await client.list_complexes("8", "1")   # Patna district
+    districts = await client.list_districts("8")  # Bihar
+    complexes = await client.list_complexes("8", "1")  # Patna district
 
     # Parse complex value to get code + establishment info
-    complex_val = list(complexes.keys())[-1]            # e.g. "1080010@2,3,4@Y"
+    complex_val = list(complexes.keys())[-1]  # e.g. "1080010@2,3,4@Y"
     code, ests, needs_est = parse_complex_value(complex_val)
     est = ests[0] if needs_est else ""
 
@@ -209,10 +213,13 @@ async with DistrictCourtClient(captcha_solver=solver) as client:
     # {"89^2": "ADMINISTRATIVE SUITE", "152^2": "Anticipatory Bail - ABP", ...}
 
     cases = await client.case_status(
-        state_code="8", dist_code="1",
-        court_complex_code=code, est_code=est,
-        case_type="89^2",       # full compound code, not just "89"
-        case_number="100", year="2024",
+        state_code="8",
+        dist_code="1",
+        court_complex_code=code,
+        est_code=est,
+        case_type="89^2",  # full compound code, not just "89"
+        case_number="100",
+        year="2024",
     )
     for case in cases:
         print(f"{case.case_number}: {case.petitioner} v {case.respondent}")
@@ -252,7 +259,10 @@ from bharat_courts import ArchiveClient
 async with ArchiveClient() as client:
     # Substring match on judge, year range, partition-pruned in DuckDB.
     results = await client.search(
-        court="sci", judge="chandrachud", year=(2018, 2024), limit=20,
+        court="sci",
+        judge="chandrachud",
+        year=(2018, 2024),
+        limit=20,
     )
     for j in results:
         print(f"{j.decision_date}  {j.case_id}  {j.title}")
@@ -394,9 +404,9 @@ Primary client for High Court case data via `hcservices.ecourts.gov.in`.
 from bharat_courts import HCServicesClient
 
 client = HCServicesClient(
-    config=None,            # BharatCourtsConfig | None — uses global config singleton if None
-    captcha_solver=None,    # CaptchaSolver | None — defaults to OCRCaptchaSolver if ddddocr installed
-    http_client=None,       # RateLimitedClient | None — creates one internally if None
+    config=None,  # BharatCourtsConfig | None — uses global config singleton if None
+    captcha_solver=None,  # CaptchaSolver | None — defaults to OCRCaptchaSolver if ddddocr installed
+    http_client=None,  # RateLimitedClient | None — creates one internally if None
 )
 ```
 
@@ -470,7 +480,7 @@ Look up case status by case number. **CAPTCHA required** (auto-retried, default 
 ```python
 cases = await client.case_status(
     delhi,
-    case_type="134",      # numeric code from list_case_types()
+    case_type="134",  # numeric code from list_case_types()
     case_number="1",
     year="2024",
 )
@@ -598,9 +608,9 @@ Unlike High Courts (which use static `get_court()` codes), district courts requi
 from bharat_courts import DistrictCourtClient
 
 client = DistrictCourtClient(
-    config=None,            # BharatCourtsConfig | None
-    captcha_solver=None,    # CaptchaSolver | None — defaults to OCRCaptchaSolver if ddddocr installed
-    http_client=None,       # RateLimitedClient | None
+    config=None,  # BharatCourtsConfig | None
+    captcha_solver=None,  # CaptchaSolver | None — defaults to OCRCaptchaSolver if ddddocr installed
+    http_client=None,  # RateLimitedClient | None
 )
 ```
 
@@ -645,6 +655,7 @@ complexes = await client.list_complexes("8", "1")  # Bihar, Patna
 
 # Parse the value to extract the code and check if establishment selection is needed
 from bharat_courts.districtcourts.parser import parse_complex_value
+
 code, est_codes, needs_est = parse_complex_value("1080010@2,3,4@Y")
 # code="1080010", est_codes=["2","3","4"], needs_est=True
 ```
@@ -688,10 +699,13 @@ Search by case number. `case_type` must be the full compound `"<code>^<est>"` st
 
 ```python
 cases = await client.case_status(
-    state_code="8", dist_code="1",
-    court_complex_code="1080010", est_code="2",
-    case_type="89^2",      # full compound code, not just "89"
-    case_number="100", year="2024",
+    state_code="8",
+    dist_code="1",
+    court_complex_code="1080010",
+    est_code="2",
+    case_type="89^2",  # full compound code, not just "89"
+    case_number="100",
+    year="2024",
 )
 ```
 
@@ -701,10 +715,13 @@ Search by party name (min 3 characters). `year` is mandatory.
 
 ```python
 cases = await client.case_status_by_party(
-    state_code="8", dist_code="1",
-    court_complex_code="1080010", est_code="2",
-    party_name="kumar", year="2024",
-    status_filter="Pending",   # "Pending", "Disposed", or "Both"
+    state_code="8",
+    dist_code="1",
+    court_complex_code="1080010",
+    est_code="2",
+    party_name="kumar",
+    year="2024",
+    status_filter="Pending",  # "Pending", "Disposed", or "Both"
 )
 ```
 
@@ -714,9 +731,13 @@ Get court orders for a case.
 
 ```python
 orders = await client.court_orders(
-    state_code="8", dist_code="1",
-    court_complex_code="1080010", est_code="2",
-    case_type="1", case_number="100", year="2024",
+    state_code="8",
+    dist_code="1",
+    court_complex_code="1080010",
+    est_code="2",
+    case_type="1",
+    case_number="100",
+    year="2024",
 )
 ```
 
@@ -726,11 +747,13 @@ Get cause list entries. `court_no` is now **required** — discover the availabl
 
 ```python
 entries = await client.cause_list(
-    state_code="8", dist_code="1",
-    court_complex_code="1080010", est_code="2",
-    court_no="1@2",                # required, from list_cause_list_courts()
+    state_code="8",
+    dist_code="1",
+    court_complex_code="1080010",
+    est_code="2",
+    court_no="1@2",  # required, from list_cause_list_courts()
     civil=True,
-    causelist_date="20-03-2026",   # DD-MM-YYYY, defaults to today
+    causelist_date="20-03-2026",  # DD-MM-YYYY, defaults to today
 )
 for e in entries:
     print(f"#{e.serial_number} {e.case_number} — {e.petitioner} v {e.respondent}")
@@ -938,7 +961,7 @@ Search for orders/judgments by case number. **CAPTCHA required** (auto-retried, 
 
 ```python
 case_info, orders = await client.search_orders(
-    case_type="12",        # WPA
+    case_type="12",  # WPA
     case_number="12886",
     year="2024",
     establishment="appellate",
@@ -980,9 +1003,9 @@ pip install 'bharat-courts[archive]'
 from bharat_courts import ArchiveClient
 
 async with ArchiveClient(
-    cache_dir=None,          # str | None — defaults to ~/.cache/bharat-courts/archive/
-    cache_max_bytes=None,    # int | None — defaults to 5 GiB (or env override)
-    metadata_cache=True,     # bool — disable to skip the local parquet mirror
+    cache_dir=None,  # str | None — defaults to ~/.cache/bharat-courts/archive/
+    cache_max_bytes=None,  # int | None — defaults to 5 GiB (or env override)
+    metadata_cache=True,  # bool — disable to skip the local parquet mirror
 ) as client:
     ...
 ```
@@ -1038,7 +1061,7 @@ or a CNR string. SCI judgments support `language="hindi" | "tamil" | "gujarati" 
 English-only in the archive.
 
 ```python
-data = await client.fetch_pdf("DLHC010230802020")        # ~250 KB direct GET
+data = await client.fetch_pdf("DLHC010230802020")  # ~250 KB direct GET
 data = await client.fetch_pdf("ESCR010000301950", language="english")
 # First SCI fetch in a year downloads the year tar (~40–500 MB); subsequent
 # fetches for that year are tar-extraction-fast.
@@ -1075,7 +1098,7 @@ from bharat_courts import infer_court_from_cnr
 
 infer_court_from_cnr("DLHC010230802020")  # → Court(code="delhi", ...)
 infer_court_from_cnr("ESCR010000301950")  # → SUPREME_COURT
-infer_court_from_cnr("ZZZZ012345")        # → None
+infer_court_from_cnr("ZZZZ012345")  # → None
 ```
 
 Use this if you're routing CNRs yourself (e.g. into the live `JudgmentSearchClient`).
@@ -1094,10 +1117,10 @@ from bharat_courts.courts import get_court_by_judgment_code
 Look up a court by its code. Case-insensitive.
 
 ```python
-get_court("delhi")          # Delhi High Court
+get_court("delhi")  # Delhi High Court
 get_court("bombay-nagpur")  # Bombay HC, Nagpur Bench
-get_court("sci")            # Supreme Court of India
-get_court("nonexistent")    # None
+get_court("sci")  # Supreme Court of India
+get_court("nonexistent")  # None
 ```
 
 #### `get_court_by_name(name) -> Court | None`
@@ -1113,7 +1136,7 @@ get_court_by_name("Delhi High Court")  # Court(name="Delhi High Court", ...)
 Look up a court by its `judgments.ecourts.gov.in` code. Returns the main court (not bench variants).
 
 ```python
-get_court_by_judgment_code("7")   # Delhi High Court
+get_court_by_judgment_code("7")  # Delhi High Court
 get_court_by_judgment_code("27")  # Bombay High Court (main, not bench)
 ```
 
@@ -1131,7 +1154,7 @@ Returns all 30 courts (Supreme Court + all High Courts).
 from bharat_courts import ALL_COURTS, SUPREME_COURT
 
 SUPREME_COURT  # Court(name="Supreme Court of India", code="sci", state_code="0")
-ALL_COURTS     # list of all 30 Court objects
+ALL_COURTS  # list of all 30 Court objects
 ```
 
 ---
@@ -1142,7 +1165,7 @@ All models are Python dataclasses with `to_dict()` and `to_json()` serialization
 
 ```python
 # Available on all models
-model.to_dict(exclude_none=False)   # -> dict (dates become ISO strings, enums become values)
+model.to_dict(exclude_none=False)  # -> dict (dates become ISO strings, enums become values)
 model.to_json(indent=None, exclude_none=False)  # -> JSON string
 ```
 
@@ -1168,10 +1191,10 @@ class Court:
 
 ```python
 class CourtType(str, Enum):
-    SUPREME_COURT  = "supreme_court"
-    HIGH_COURT     = "high_court"
+    SUPREME_COURT = "supreme_court"
+    HIGH_COURT = "high_court"
     DISTRICT_COURT = "district_court"
-    TRIBUNAL       = "tribunal"
+    TRIBUNAL = "tribunal"
 ```
 
 #### `CaseInfo`
@@ -1181,15 +1204,15 @@ Returned by `case_status()` and `case_status_by_party()`.
 ```python
 @dataclass
 class CaseInfo:
-    case_number: str                        # "3/2024"
-    case_type: str                          # Case type label, e.g. "W.P.(C)"
-    cnr_number: str = ""                    # "DLHC010582482024"
+    case_number: str  # "3/2024"
+    case_type: str  # Case type label, e.g. "W.P.(C)"
+    cnr_number: str = ""  # "DLHC010582482024"
     filing_number: str = ""
     registration_number: str = ""
     registration_date: date | None = None
     petitioner: str = ""
     respondent: str = ""
-    status: str = ""                        # empty for HC Services (showRecords doesn't return it)
+    status: str = ""  # empty for HC Services (showRecords doesn't return it)
     court_name: str = ""
     judges: list[str] = []
     next_hearing_date: date | None = None
@@ -1203,10 +1226,10 @@ Returned by `court_orders()`.
 @dataclass
 class CaseOrder:
     order_date: date
-    order_type: str             # "Judgment" | "Order" | "Interim Order"
+    order_type: str  # "Judgment" | "Order" | "Interim Order"
     judge: str = ""
     pdf_url: str = ""
-    pdf_bytes: bytes | None = None   # populated by download_order_pdf(); excluded from serialization
+    pdf_bytes: bytes | None = None  # populated by download_order_pdf(); excluded from serialization
     order_text: str = ""
     neutral_citation: str = ""  # e.g. "2024:CHC-AS:1277" (Calcutta HC)
 ```
@@ -1219,10 +1242,10 @@ Returned by `cause_list()`.
 @dataclass
 class CauseListPDF:
     serial_number: int
-    bench: str                  # "Division Bench"
-    cause_list_type: str = ""   # "COMPLETE CAUSE LIST"
+    bench: str  # "Division Bench"
+    cause_list_type: str = ""  # "COMPLETE CAUSE LIST"
     pdf_url: str = ""
-    pdf_bytes: bytes | None = None   # excluded from serialization
+    pdf_bytes: bytes | None = None  # excluded from serialization
 ```
 
 #### `JudgmentResult`
@@ -1238,9 +1261,9 @@ class JudgmentResult:
     judgment_date: date | None = None
     judges: list[str] = []
     pdf_url: str = ""
-    pdf_bytes: bytes | None = None   # populated by download_pdf(); excluded from serialization
+    pdf_bytes: bytes | None = None  # populated by download_pdf(); excluded from serialization
     citation: str = ""
-    bench_type: str = ""             # "Division Bench" | "Single Bench" | "Full Bench"
+    bench_type: str = ""  # "Division Bench" | "Single Bench" | "Full Bench"
     source_url: str = ""
     source_id: str = ""
     metadata: dict = {}
@@ -1292,6 +1315,7 @@ All solvers implement the `CaptchaSolver` abstract base class:
 ```python
 from bharat_courts.captcha.base import CaptchaSolver
 
+
 class CaptchaSolver(ABC):
     @abstractmethod
     async def solve(self, image_bytes: bytes) -> str:
@@ -1306,8 +1330,8 @@ Automatic CAPTCHA solving using `ddddocr`. Requires `pip install bharat-courts[o
 from bharat_courts.captcha.ocr import OCRCaptchaSolver
 
 solver = OCRCaptchaSolver(
-    preprocess=False,    # Apply image binarization + median filter before OCR
-    threshold=128,       # Binarization threshold (0-255), used if preprocess=True
+    preprocess=False,  # Apply image binarization + median filter before OCR
+    threshold=128,  # Binarization threshold (0-255), used if preprocess=True
 )
 ```
 
@@ -1359,10 +1383,12 @@ Implement `CaptchaSolver` for your own solving strategy:
 ```python
 from bharat_courts.captcha.base import CaptchaSolver
 
+
 class MyCaptchaSolver(CaptchaSolver):
     async def solve(self, image_bytes: bytes) -> str:
         # Send to a CAPTCHA solving service, ML model, etc.
         return "solved_text"
+
 
 async with HCServicesClient(captcha_solver=MyCaptchaSolver()) as client:
     ...

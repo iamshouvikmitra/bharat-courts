@@ -163,11 +163,11 @@ A minimal end-to-end example:
 import asyncio
 from bharat_courts import Judgments
 
+
 async def main():
     async with Judgments() as j:
         # Structured → archive (no CAPTCHA, partition-pruned)
-        for r in await j.find(judge="chandrachud", year=(2018, 2024),
-                              court="sci", limit=10):
+        for r in await j.find(judge="chandrachud", year=(2018, 2024), court="sci", limit=10):
             print(r.decision_date, r.case_id, r.title, f"[{r.source}]")
 
         # Free-text → live (only it does full-body search)
@@ -177,6 +177,7 @@ async def main():
         # CNR alone → archive, prefix-routed, no scan
         result = await j.find(cnr="DLHC010230802020")
         pdf = await j.fetch_pdf(result[0])
+
 
 asyncio.run(main())
 ```
@@ -196,7 +197,7 @@ from bharat_courts import infer_court_from_cnr
 
 infer_court_from_cnr("DLHC010230802020")  # → Delhi High Court
 infer_court_from_cnr("ESCR010000301950")  # → Supreme Court of India
-infer_court_from_cnr("ZZZZ012345")        # → None
+infer_court_from_cnr("ZZZZ012345")  # → None
 ```
 
 It is verified against all 25 High Court partitions plus the Supreme Court. Both

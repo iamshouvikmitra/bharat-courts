@@ -51,6 +51,7 @@ async def main():
             with open("sci_latest.pdf", "wb") as f:
                 f.write(j.pdf_bytes)
 
+
 asyncio.run(main())
 ```
 
@@ -133,10 +134,14 @@ See the [models reference](../reference/models.md) for the full field list.
     async def main():
         async with Judgments() as j:
             results = await j.find(
-                court="sci", judge="chandrachud", year=(2018, 2024), limit=10,
+                court="sci",
+                judge="chandrachud",
+                year=(2018, 2024),
+                limit=10,
             )
             for r in results:
                 print(f"{r.decision_date}  {r.case_id}  {r.title}")
+
 
     asyncio.run(main())
     ```

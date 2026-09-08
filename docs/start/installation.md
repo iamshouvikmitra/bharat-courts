@@ -141,11 +141,13 @@ A quick check that the package imports and the registry loads:
 import asyncio
 from bharat_courts import Judgments, get_court
 
+
 async def main():
-    print(get_court("delhi"))          # Court(name="Delhi High Court", ...)
+    print(get_court("delhi"))  # Court(name="Delhi High Court", ...)
     async with Judgments() as j:
         results = await j.find(cnr="DLHC010230802020")
         print(f"{len(results)} result(s)")
+
 
 asyncio.run(main())
 ```

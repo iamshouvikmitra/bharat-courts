@@ -90,17 +90,19 @@ Each `JudgmentResult` carries `title`, `court_name`, `case_number`, `judgment_da
 import asyncio
 from bharat_courts import JudgmentSearchClient
 
+
 async def main():
     async with JudgmentSearchClient() as client:
         result = await client.search(
             "right to privacy",
-            search_opt="ALL",   # match all of the words
-            court_type="2",     # High Courts
+            search_opt="ALL",  # match all of the words
+            court_type="2",  # High Courts
             page_size=25,
         )
         print(f"{result.total_count} matches; showing {len(result.items)}")
         for j in result.items:
             print(f"{j.judgment_date}  {j.court_name}  {j.title}")
+
 
 asyncio.run(main())
 ```
@@ -115,6 +117,7 @@ session expires during a long walk.
 import asyncio
 from bharat_courts import JudgmentSearchClient
 
+
 async def main():
     async with JudgmentSearchClient() as client:
         all_items = []
@@ -126,6 +129,7 @@ async def main():
             print(f"page {page.page}/{page.total_pages}  (+{len(page.items)})")
             all_items.extend(page.items)
         print(f"collected {len(all_items)} judgments")
+
 
 asyncio.run(main())
 ```
@@ -148,6 +152,7 @@ resolves it through the portal's download endpoint for you.
 import asyncio
 from bharat_courts import JudgmentSearchClient
 
+
 async def main():
     async with JudgmentSearchClient() as client:
         result = await client.search("medical negligence", search_opt="PHRASE")
@@ -156,6 +161,7 @@ async def main():
         first = await client.download_pdf(result.items[0])
         with open("judgment.pdf", "wb") as f:
             f.write(first.pdf_bytes)
+
 
 asyncio.run(main())
 ```
@@ -170,6 +176,7 @@ already has `pdf_bytes`, and by default logs failures and keeps going (set
 import asyncio
 from bharat_courts import JudgmentSearchClient
 
+
 async def main():
     async with JudgmentSearchClient() as client:
         result = await client.search("anticipatory bail", page_size=25)
@@ -180,6 +187,7 @@ async def main():
                 print(f"{len(j.pdf_bytes):>8} bytes  {j.title}")
             else:
                 print(f"   (no PDF)  {j.title}")
+
 
 asyncio.run(main())
 ```

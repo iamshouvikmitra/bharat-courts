@@ -120,10 +120,10 @@ async def main():
         states = await client.list_states()
         # {"8": "Bihar", "7": "Delhi", ...}
 
-        districts = await client.list_districts("8")        # Bihar
+        districts = await client.list_districts("8")  # Bihar
         # {"1": "Patna", "35": "Gaya", ...}
 
-        complexes = await client.list_complexes("8", "1")   # Patna
+        complexes = await client.list_complexes("8", "1")  # Patna
         # {"1080010@2,3,4@Y": "Civil Court, Patna Sadar", ...}
 
         # 2. Parse the complex value → (complex_code, est_codes, needs_establishment)
@@ -143,34 +143,48 @@ async def main():
 
         # 4. Search by party name (CAPTCHA auto-solved and retried)
         cases = await client.case_status_by_party(
-            state_code="8", dist_code="1",
-            court_complex_code=complex_code, est_code=est_code,
-            party_name="kumar", year="2024",
+            state_code="8",
+            dist_code="1",
+            court_complex_code=complex_code,
+            est_code=est_code,
+            party_name="kumar",
+            year="2024",
         )
         for c in cases:
             print(f"{c.case_number}: {c.petitioner} vs {c.respondent}  [{c.cnr_number}]")
 
         # 5. Search by case number
         by_number = await client.case_status(
-            state_code="8", dist_code="1",
-            court_complex_code=complex_code, est_code=est_code,
-            case_type="1", case_number="100", year="2024",
+            state_code="8",
+            dist_code="1",
+            court_complex_code=complex_code,
+            est_code=est_code,
+            case_type="1",
+            case_number="100",
+            year="2024",
         )
 
         # 6. Get orders for a case
         orders = await client.court_orders(
-            state_code="8", dist_code="1",
-            court_complex_code=complex_code, est_code=est_code,
-            case_type="1", case_number="100", year="2024",
+            state_code="8",
+            dist_code="1",
+            court_complex_code=complex_code,
+            est_code=est_code,
+            case_type="1",
+            case_number="100",
+            year="2024",
         )
         for o in orders:
             print(f"{o.order_date} | {o.order_type} | {o.judge} | {o.pdf_url}")
 
         # 7. Cause list — court_name is auto-resolved from court_no if omitted
         entries = await client.cause_list(
-            state_code="8", dist_code="1",
-            court_complex_code=complex_code, est_code=est_code,
-            court_no="1@2", civil=True,
+            state_code="8",
+            dist_code="1",
+            court_complex_code=complex_code,
+            est_code=est_code,
+            court_no="1@2",
+            civil=True,
         )
         for e in entries:
             print(f"{e.serial_number}. {e.case_number}: {e.petitioner} vs {e.respondent}")

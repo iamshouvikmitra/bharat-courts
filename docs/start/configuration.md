@@ -89,10 +89,12 @@ import asyncio
 from bharat_courts import HCServicesClient
 from bharat_courts.config import BharatCourtsConfig
 
+
 async def main():
     cfg = BharatCourtsConfig(timeout=120, request_delay=2.0)
     async with HCServicesClient(config=cfg) as client:
         ...
+
 
 asyncio.run(main())
 ```

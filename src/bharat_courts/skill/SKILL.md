@@ -46,6 +46,7 @@ For the federated `Judgments` facade, install **both** `[archive]` and `[ocr]` s
 import asyncio
 from bharat_courts import Judgments
 
+
 async def main():
     async with Judgments() as j:
         # 1. Structured filters → archive (no CAPTCHA, partition-pruned)
@@ -65,6 +66,7 @@ async def main():
 
         # 4. Force a backend if you need to (e.g. only-live for recent cases)
         recent = await j.find(text="bail", source="live", limit=5)
+
 
 asyncio.run(main())
 ```
@@ -90,6 +92,7 @@ import asyncio
 from bharat_courts import get_court, HCServicesClient
 from bharat_courts.captcha.ocr import OCRCaptchaSolver
 
+
 async def main():
     court = get_court("delhi")  # or "bombay", "calcutta", etc.
     solver = OCRCaptchaSolver()
@@ -111,6 +114,7 @@ async def main():
         benches = await client.list_benches(court)
         case_types = await client.list_case_types(court)
 
+
 asyncio.run(main())
 ```
 
@@ -123,14 +127,17 @@ from bharat_courts import DistrictCourtClient
 from bharat_courts.captcha.ocr import OCRCaptchaSolver
 from bharat_courts.districtcourts.parser import parse_complex_value
 
+
 async def main():
     solver = OCRCaptchaSolver()
 
     async with DistrictCourtClient(captcha_solver=solver) as client:
         # 1. Discover the court hierarchy
-        states = await client.list_states()          # {"8": "Bihar", "7": "Delhi", ...}
+        states = await client.list_states()  # {"8": "Bihar", "7": "Delhi", ...}
         districts = await client.list_districts("8")  # {"1": "Patna", "35": "Gaya", ...}
-        complexes = await client.list_complexes("8", "1")  # {"1080010@2,3,4@Y": "Civil Court, Patna Sadar", ...}
+        complexes = await client.list_complexes(
+            "8", "1"
+        )  # {"1080010@2,3,4@Y": "Civil Court, Patna Sadar", ...}
 
         # 2. Parse the complex value to get the code and check if establishment is needed
         complex_val = list(complexes.keys())[0]
@@ -142,33 +149,47 @@ async def main():
 
         # 4. Search by party name (CAPTCHA auto-retried)
         cases = await client.case_status_by_party(
-            state_code="8", dist_code="1",
-            court_complex_code=complex_code, est_code=est_code,
-            party_name="kumar", year="2024",
+            state_code="8",
+            dist_code="1",
+            court_complex_code=complex_code,
+            est_code=est_code,
+            party_name="kumar",
+            year="2024",
         )
         for case in cases:
             print(f"{case.case_number}: {case.petitioner} vs {case.respondent}")
 
         # 5. Search by case number
         cases = await client.case_status(
-            state_code="8", dist_code="1",
-            court_complex_code=complex_code, est_code=est_code,
-            case_type="1", case_number="100", year="2024",
+            state_code="8",
+            dist_code="1",
+            court_complex_code=complex_code,
+            est_code=est_code,
+            case_type="1",
+            case_number="100",
+            year="2024",
         )
 
         # 6. Get court orders
         orders = await client.court_orders(
-            state_code="8", dist_code="1",
-            court_complex_code=complex_code, est_code=est_code,
-            case_type="1", case_number="100", year="2024",
+            state_code="8",
+            dist_code="1",
+            court_complex_code=complex_code,
+            est_code=est_code,
+            case_type="1",
+            case_number="100",
+            year="2024",
         )
 
         # 7. Get cause list
         entries = await client.cause_list(
-            state_code="8", dist_code="1",
-            court_complex_code=complex_code, est_code=est_code,
+            state_code="8",
+            dist_code="1",
+            court_complex_code=complex_code,
+            est_code=est_code,
             civil=True,
         )
+
 
 asyncio.run(main())
 ```
@@ -180,6 +201,7 @@ Search High Court judgments by keyword on judgments.ecourts.gov.in.
 ```python
 from bharat_courts import JudgmentSearchClient
 from bharat_courts.captcha.ocr import OCRCaptchaSolver
+
 
 async def main():
     solver = OCRCaptchaSolver()
@@ -202,6 +224,7 @@ async def main():
         # Batch download with automatic session reset every 25 downloads
         judgments = await client.download_pdfs(result.items, batch_size=25)
 
+
 asyncio.run(main())
 ```
 
@@ -212,11 +235,12 @@ Search orders/judgments directly on calcuttahighcourt.gov.in — has better PDF 
 ```python
 from bharat_courts import CalcuttaHCClient
 
+
 async def main():
     async with CalcuttaHCClient() as client:
         # Search by case number
         orders = await client.search_orders(
-            case_type="12",        # WPA
+            case_type="12",  # WPA
             case_number="12886",
             year="2024",
             establishment="appellate",  # or "original", "jalpaiguri", "portblair"
@@ -225,6 +249,7 @@ async def main():
             print(f"{order.order_date} | {order.judge} | {order.neutral_citation}")
             if order.pdf_url:
                 pdf = await client.download_order_pdf(order.pdf_url)
+
 
 asyncio.run(main())
 ```
@@ -247,11 +272,15 @@ Use the archive whenever the user wants historical research, bulk PDF retrieval,
 ```python
 from bharat_courts import ArchiveClient
 
+
 async def main():
     async with ArchiveClient() as client:
         # 1. Search by judge + year range (partition-pruned in DuckDB)
         results = await client.search(
-            court="sci", judge="chandrachud", year=(2018, 2024), limit=20,
+            court="sci",
+            judge="chandrachud",
+            year=(2018, 2024),
+            limit=20,
         )
         for j in results:
             print(f"{j.decision_date}  {j.case_id}  {j.title}")
@@ -273,6 +302,7 @@ async def main():
 
         # 5. SCI supports regional-language PDFs
         hindi = await client.fetch_pdf("ESCR010000301950", language="hindi")
+
 
 asyncio.run(main())
 ```
@@ -315,7 +345,7 @@ infer_court_from_cnr("DLHC010230802020")  # → Court(code="delhi")
 infer_court_from_cnr("ESCR010000301950")  # → SUPREME_COURT
 infer_court_from_cnr("HCBM020056322016")  # → Bombay (note: legacy prefix)
 infer_court_from_cnr("WBCHCJ0008142019")  # → Calcutta
-infer_court_from_cnr("garbage")           # → None (never raises)
+infer_court_from_cnr("garbage")  # → None (never raises)
 ```
 
 ## Available High Courts
@@ -412,6 +442,7 @@ Both HC Services and District Courts use Securimage CAPTCHAs. Two auto-solvers a
 ```python
 # Option 1: ddddocr (pip install bharat-courts[ocr])
 from bharat_courts.captcha.ocr import OCRCaptchaSolver
+
 solver = OCRCaptchaSolver()  # ~60% accuracy, auto-retry with fresh sessions
 
 # Option 2: ONNX model (pip install bharat-courts[onnx])
@@ -419,14 +450,18 @@ solver = OCRCaptchaSolver()  # ~60% accuracy, auto-retry with fresh sessions
 # Get a token at https://huggingface.co/settings/tokens
 # export HF_TOKEN=hf_...
 from bharat_courts.captcha.onnx import ONNXCaptchaSolver
+
 solver = ONNXCaptchaSolver()  # lighter, uses onnxruntime, needs HF auth
 
 # Option 3: Manual input
 from bharat_courts.captcha.manual import ManualCaptchaSolver
+
 solver = ManualCaptchaSolver()  # prompts on stdin
 
 # Option 4: Custom solver
 from bharat_courts.captcha.base import CaptchaSolver
+
+
 class MySolver(CaptchaSolver):
     async def solve(self, image_bytes: bytes) -> str:
         return "solved_text"

@@ -23,6 +23,7 @@ pip install 'bharat-courts[archive,ocr]'
 import asyncio
 from bharat_courts import Judgments
 
+
 async def main():
     async with Judgments() as j:
         # 1. Structured filters → archive (no CAPTCHA, partition-pruned)
@@ -40,6 +41,7 @@ async def main():
             pdf_bytes = await j.fetch_pdf(hits[0])
             with open("judgment.pdf", "wb") as f:
                 f.write(pdf_bytes)
+
 
 asyncio.run(main())
 ```

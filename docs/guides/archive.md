@@ -45,15 +45,20 @@ pip install "bharat-courts[archive]"
 import asyncio
 from bharat_courts import ArchiveClient
 
+
 async def main():
     async with ArchiveClient() as client:
         # Search by judge + year range (partition-pruned in DuckDB)
         results = await client.search(
-            court="sci", judge="chandrachud", year=(2018, 2024), limit=20,
+            court="sci",
+            judge="chandrachud",
+            year=(2018, 2024),
+            limit=20,
         )
         for j in results:
             print(f"{j.decision_date}  {j.case_id}  {j.title}")
             print(f"  {j.citation}  outcome: {j.disposal_nature}")
+
 
 asyncio.run(main())
 ```
@@ -93,7 +98,10 @@ and the facade.
 ```python
 async with ArchiveClient() as client:
     results = await client.search(
-        court="delhi", judge="hari shankar", year=(2019, 2021), limit=25,
+        court="delhi",
+        judge="hari shankar",
+        year=(2019, 2021),
+        limit=25,
     )
     for j in results:
         print(j.decision_date, j.case_id, j.title)
@@ -107,8 +115,8 @@ scanning all 25 HC partitions.
 
 ```python
 async with ArchiveClient() as client:
-    results = await client.search(cnr="DLHC010230802020")   # → Delhi HC
-    sci = await client.search(cnr="ESCR010000301950")       # → Supreme Court
+    results = await client.search(cnr="DLHC010230802020")  # → Delhi HC
+    sci = await client.search(cnr="ESCR010000301950")  # → Supreme Court
 ```
 
 !!! tip "Inspect the routing yourself"
@@ -177,7 +185,7 @@ async with ArchiveClient() as client:
 ```python
 async with ArchiveClient() as client:
     print(await client.count(court="delhi", year=2020))  # {"hc": 18000}
-    print(await client.count(year=2020))                 # {"sci": ..., "hc": ...}
+    print(await client.count(year=2020))  # {"sci": ..., "hc": ...}
 ```
 
 ## Gotchas

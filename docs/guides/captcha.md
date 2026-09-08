@@ -60,9 +60,7 @@ async def main():
     court = get_court("delhi")
     # No captcha_solver= passed — the client uses OCRCaptchaSolver automatically.
     async with HCServicesClient() as client:
-        cases = await client.case_status(
-            court, case_type="134", case_number="1", year="2024"
-        )
+        cases = await client.case_status(court, case_type="134", case_number="1", year="2024")
         for c in cases:
             print(c.case_number, c.petitioner, "vs", c.respondent)
 

@@ -37,20 +37,21 @@ from bharat_courts import CalcuttaHCClient
 async def main():
     async with CalcuttaHCClient() as client:
         case_info, orders = await client.search_orders(
-            case_type="12",        # numeric case-type code; "12" = WPA
+            case_type="12",  # numeric case-type code; "12" = WPA
             case_number="12886",
             year="2024",
             establishment="appellate",
         )
 
         if case_info:
-            print(f"{case_info.case_number}: "
-                  f"{case_info.petitioner} vs {case_info.respondent}")
+            print(f"{case_info.case_number}: {case_info.petitioner} vs {case_info.respondent}")
             print(f"CNR: {case_info.cnr_number}  ({case_info.court_name})")
 
         for i, order in enumerate(orders):
-            print(f"{order.order_date} | {order.order_type} | "
-                  f"{order.judge} | {order.neutral_citation}")
+            print(
+                f"{order.order_date} | {order.order_type} | "
+                f"{order.judge} | {order.neutral_citation}"
+            )
             if order.pdf_url:
                 pdf = await client.download_order_pdf(order.pdf_url)
                 with open(f"wpa_12886_2024_order_{i}.pdf", "wb") as f:

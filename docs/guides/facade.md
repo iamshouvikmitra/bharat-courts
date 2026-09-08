@@ -30,11 +30,13 @@ each carry a `.source` field (`"archive"` or `"live"`) so you always know the or
 import asyncio
 from bharat_courts import Judgments
 
+
 async def main():
     async with Judgments() as j:
         hits = await j.find(judge="chandrachud", year=2020, court="sci", limit=10)
         for r in hits:
             print(r.decision_date, r.case_id, r.title, f"[{r.source}]")
+
 
 asyncio.run(main())
 ```
@@ -175,7 +177,7 @@ async with Judgments() as j:
 
 ```python
 await j.find()  # raises ValueError: needs at least one of text, cnr, or a
-                # structured filter (court / year / judge / party / citation)
+# structured filter (court / year / judge / party / citation)
 ```
 
 ## `fetch_pdf()`
@@ -197,7 +199,7 @@ are English only.
 ```python
 async with Judgments() as j:
     hits = await j.find(cnr="DLHC010230802020")
-    pdf = await j.fetch_pdf(hits[0])              # or: await j.fetch_pdf("DLHC010230802020")
+    pdf = await j.fetch_pdf(hits[0])  # or: await j.fetch_pdf("DLHC010230802020")
     with open("judgment.pdf", "wb") as f:
         f.write(pdf)
 ```
@@ -213,8 +215,8 @@ async with Judgments() as j:
 
     async with JudgmentSearchClient() as client:
         result = await client.search("right to privacy")
-        jr = result.items[0]                      # a JudgmentResult, session-bound
-        jr = await client.download_pdf(jr)        # fills jr.pdf_bytes in place
+        jr = result.items[0]  # a JudgmentResult, session-bound
+        jr = await client.download_pdf(jr)  # fills jr.pdf_bytes in place
         with open("judgment.pdf", "wb") as f:
             f.write(jr.pdf_bytes)
     ```
