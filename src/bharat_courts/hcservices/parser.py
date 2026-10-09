@@ -17,6 +17,7 @@ import json
 import logging
 import re
 from datetime import date, datetime
+from typing import TypeVar
 
 from bs4 import BeautifulSoup, Tag
 
@@ -61,6 +62,33 @@ def _clean_text(text: str | None) -> str:
     if not text:
         return ""
     return re.sub(r"\s+", " ", text.strip())
+
+
+# ---------------------------------------------------------------------------
+# Dropdown lists — ``code~name#`` text
+# ---------------------------------------------------------------------------
+
+#: One ``code~name`` entry. Anchored to the start, a ``#`` separator or a
+#: newline, and the code must run straight into the ``~``: ``fillActType``
+#: answers with a PHP ``var_dump`` in front of the list
+#: (``object(PDO)#959 (0) {\n}\n0~Select act type#1~...``), whose own ``#``
+#: would otherwise start a bogus "959 (0) {...}" entry.
+_CODE_NAME_RE = re.compile(r"(?:^|[#\n])[ \t]*(\w+)~([^#\n]+)")
+
+
+def parse_code_name_list(raw: str) -> dict[str, str]:
+    """Parse a ``code~name#code~name#`` dropdown response into a dict.
+
+    Used by the bench, case type and act lists. Drops the ``0`` / "Select
+    ..." placeholder and unescapes names (acts arrive as ``&amp;``).
+    """
+    out: dict[str, str] = {}
+    for code, name in _CODE_NAME_RE.findall(raw.replace("﻿", "")):
+        name = html.unescape(name).strip()
+        if code == "0" or not name or "select" in name.lower():
+            continue
+        out[code] = name
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +228,7 @@ def _case_infos_from_records(records: list[dict], total: int) -> list[CaseInfo]:
                 registration_number=case_no2,
                 petitioner=html.unescape(rec.get("pet_name") or ""),
                 respondent=html.unescape(rec.get("res_name") or ""),
+                decision_date=_parse_date(str(rec.get("date_of_decision") or "")),
             )
         )
 
@@ -304,11 +333,16 @@ def parse_advocate_cause_list(raw: str) -> list[CauseListEntry]:
     return results
 
 
-def dedupe_by_cnr(entries: list[CauseListEntry]) -> list[CauseListEntry]:
+_Row = TypeVar("_Row", CauseListEntry, CaseInfo)
+
+
+def dedupe_by_cnr(entries: list[_Row]) -> list[_Row]:
     """Collapse duplicate rows into one entry per case, preserving order.
 
     The portal repeats a case once per party *per judge*, so a 14-row
     response can be 4 actual matters. The first row for each CNR is kept.
+    Works on cause list entries and on search results alike — an act search
+    repeats a case once per party too.
 
     Note what that discards: on a division bench the surviving row names one
     judge, not the coram, and it names one party of several. Callers that
@@ -322,6 +356,25 @@ def dedupe_by_cnr(entries: list[CauseListEntry]) -> list[CauseListEntry]:
             continue
         seen.add(key)
         out.append(e)
+    return out
+
+
+def filter_by_year(cases: list[CaseInfo], year: int | tuple[int, int] | None) -> list[CaseInfo]:
+    """Keep cases registered in ``year`` (an int, or an inclusive range).
+
+    For searches the portal cannot narrow by year itself, such as by act.
+    The year is the last ``/`` segment of ``case_number`` — "372/2022" on
+    High Courts, "CA/142/2026" on district courts. Cases without a readable
+    year are dropped when a filter is given.
+    """
+    if year is None:
+        return cases
+    lo, hi = year if isinstance(year, tuple) else (year, year)
+    out = []
+    for c in cases:
+        tail = c.case_number.rsplit("/", 1)[-1]
+        if tail.isdigit() and lo <= int(tail) <= hi:
+            out.append(c)
     return out
 
 

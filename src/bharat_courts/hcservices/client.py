@@ -25,11 +25,14 @@ from bharat_courts.config import config as default_config
 from bharat_courts.hcservices import endpoints
 from bharat_courts.hcservices.parser import (
     CaptchaError,
+    dedupe_by_cnr,
+    filter_by_year,
     is_captcha_rejection,
     parse_advocate_cause_list,
     parse_advocate_search,
     parse_case_status,
     parse_cause_list,
+    parse_code_name_list,
     parse_orders,
 )
 from bharat_courts.http import RateLimitedClient
@@ -513,17 +516,7 @@ class HCServicesClient:
         await self._init_session()
         form = endpoints.fill_bench_form(state_code=court.state_code)
         resp = await self._http.post(endpoints.INDEX_QRY_URL, data=form)
-        benches = {}
-        for entry in resp.text.split("#"):
-            entry = entry.strip()
-            if "~" in entry:
-                code, name = entry.split("~", 1)
-                # Strip BOM (\ufeff) and whitespace from portal response
-                code = code.strip().strip("\ufeff")
-                name = name.strip().strip("\ufeff")
-                if code and code != "0" and name and "select" not in name.lower():
-                    benches[code] = name
-        return benches
+        return parse_code_name_list(resp.text)
 
     async def list_case_types(self, court: Court, *, bench_code: str = "1") -> dict[str, str]:
         """Get available case types for a High Court bench.
@@ -538,16 +531,119 @@ class HCServicesClient:
             court_code=bench_code,
         )
         resp = await self._http.post(endpoints.FILL_CASE_TYPE_URL, data=form)
-        case_types = {}
-        for entry in resp.text.split("#"):
-            entry = entry.strip().strip("\ufeff")
-            if "~" in entry:
-                code, name = entry.split("~", 1)
-                code = code.strip()
-                name = name.strip()
-                if code and code != "0" and name and "select" not in name.lower():
-                    case_types[code] = name
-        return case_types
+        return parse_code_name_list(resp.text)
+
+    async def list_acts(
+        self, court: Court, *, bench_code: str = "1", search: str = ""
+    ) -> dict[str, str]:
+        """Get the acts a High Court bench files cases under.
+
+        Needs no CAPTCHA. The codes are **local to the court** and not
+        portable: IPC is ``"1"`` ("INDIAN PENAL CODE") in Delhi but ``"535"``
+        ("PENAL CODE, 1860") in Gujarat, and one act can appear under
+        several codes \u2014 Delhi lists five for arbitration. Look codes up per
+        court rather than reusing them.
+
+        Args:
+            court: Court object.
+            bench_code: Bench code from :meth:`list_benches` (default "1").
+            search: Optional substring to narrow the list server-side.
+
+        Returns:
+            Dict mapping act code to act name, e.g.
+            ``{"18": "NEGOTIABLE INSTRUMENTS ACT, 1881", ...}``.
+        """
+        await self._init_session()
+        form = endpoints.fill_act_type_form(
+            state_code=court.state_code,
+            court_code=bench_code,
+            search_act=search,
+        )
+        resp = await self._http.post(
+            endpoints.FILL_ACT_TYPE_URL,
+            data=form,
+            headers={"Referer": endpoints.MAIN_PAGE_URL},
+        )
+        return parse_code_name_list(resp.text)
+
+    async def case_status_by_act(
+        self,
+        court: Court,
+        *,
+        act_code: str,
+        section: str = "",
+        status_filter: str = "Pending",
+        bench_code: str = "1",
+        year: int | tuple[int, int] | None = None,
+        dedupe: bool = True,
+    ) -> list[CaseInfo]:
+        """Search cases registered under an act, optionally one section.
+
+        This is the court's own record of what a case was filed under \u2014 not
+        a text search \u2014 so it finds cases that never name the act in their
+        title. For judgments that *mention* an act, use
+        :meth:`JudgmentSearchClient.search` with ``act=``.
+
+        The portal returns every match in one response, with no paging and
+        no year filter: Delhi's IPC s.302 disposed list is ~16,000 rows and
+        6 MB. Pass ``section`` to narrow it; ``year`` is applied client-side
+        after the download.
+
+        Args:
+            court: Court object.
+            act_code: Act code from :meth:`list_acts` for this court.
+            section: Section, matched **exactly** ("13" does not find 138).
+                Letters, digits and spaces only \u2014 search "138/141" as two
+                calls. Empty means every section.
+            status_filter: "Pending", "Disposed", or "Both". The portal has
+                no "Both", so that makes two requests (two CAPTCHA solves).
+            bench_code: Bench code from :meth:`list_benches` (default "1").
+            year: Registration year, or an inclusive ``(start, end)`` range.
+            dedupe: Collapse the per-party duplicate rows to one per CNR.
+
+        Returns:
+            List of CaseInfo. Disposed rows carry ``decision_date``. A few
+            rows may carry the trial court's CNR rather than the High
+            Court's (seen live on Delhi CRL.M.C. matters: ``DLND…``), so
+            don't assume every ``cnr_number`` routes to this court.
+
+        Raises:
+            ValueError: On an invalid section or status filter.
+        """
+        # Before any session or CAPTCHA, as with the advocate search.
+        endpoints.validate_section(section)
+        statuses = {
+            "Pending": ["Pending"],
+            "Disposed": ["Disposed"],
+            "Both": ["Pending", "Disposed"],
+        }.get(status_filter)
+        if statuses is None:
+            raise ValueError(
+                f"status_filter must be 'Pending', 'Disposed' or 'Both', got {status_filter!r}"
+            )
+
+        results: list[CaseInfo] = []
+        for status in statuses:
+
+            def build_form(captcha: str, status: str = status) -> dict:
+                return endpoints.case_status_by_act_form(
+                    state_code=court.state_code,
+                    court_code=bench_code,
+                    act_code=act_code,
+                    section=section,
+                    status_filter=status,
+                    captcha=captcha,
+                )
+
+            resp = await self._post_with_captcha_retry(endpoints.SHOW_RECORDS_URL, build_form)
+            rows = parse_case_status(resp.text)
+            for r in rows:
+                r.court_name = court.name
+                r.status = status
+            results.extend(rows)
+
+        results = filter_by_year(results, year)
+        return dedupe_by_cnr(results) if dedupe else results
 
     async def download_order_pdf(self, pdf_url: str) -> bytes:
         """Download an order/judgment PDF.

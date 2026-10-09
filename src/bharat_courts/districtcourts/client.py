@@ -47,6 +47,8 @@ from bharat_courts.districtcourts.parser import (
     parse_option_tags,
     parse_state_options,
 )
+from bharat_courts.hcservices.endpoints import validate_section
+from bharat_courts.hcservices.parser import dedupe_by_cnr, filter_by_year
 from bharat_courts.http import RateLimitedClient
 from bharat_courts.models import CaseDetail, CaseInfo, CaseOrder, CauseListEntry
 
@@ -634,6 +636,130 @@ class DistrictCourtClient:
         )
         html = result.get("party_data", "")
         return parse_case_status_html(html)
+
+    async def list_acts(
+        self,
+        state_code: str,
+        dist_code: str,
+        court_complex_code: str,
+        est_code: str = "",
+        search: str = "",
+    ) -> dict[str, str]:
+        """Get the acts a court complex/establishment files cases under.
+
+        Needs no CAPTCHA. As on the High Courts, codes and names are local
+        to the court: one Delhi complex lists IPC under no name containing
+        "penal" at all, so resolve act names per court.
+
+        Args:
+            state_code: State code.
+            dist_code: District code.
+            court_complex_code: Court complex code (bare or dropdown form).
+            est_code: Establishment code, for complexes that need one.
+            search: Optional substring to narrow the list server-side.
+
+        Returns:
+            Dict mapping act code to act name.
+        """
+        court_complex_code = self._bare_complex_code(court_complex_code)
+        await self._init_session()
+        await self._setup_court(
+            state_code=state_code,
+            dist_code=dist_code,
+            court_complex_code=court_complex_code,
+            est_code=est_code,
+        )
+        form = endpoints.fill_act_type_form(
+            state_code=state_code,
+            dist_code=dist_code,
+            court_complex_code=court_complex_code,
+            est_code=est_code,
+            search_act=search,
+        )
+        result = await self._post_ajax("casestatus/fillActType", form)
+        return parse_option_tags(result.get("act_list", ""))
+
+    async def case_status_by_act(
+        self,
+        *,
+        state_code: str,
+        dist_code: str,
+        court_complex_code: str,
+        est_code: str = "",
+        act_code: str,
+        section: str = "",
+        status_filter: str = "Pending",
+        year: int | tuple[int, int] | None = None,
+        dedupe: bool = True,
+    ) -> list[CaseInfo]:
+        """Search cases registered under an act, optionally one section.
+
+        Covers **one establishment**: within a complex, NI Act cheque cases
+        sit with the magistrate's establishment, not the sessions court, so
+        a complex-wide search has to call this once per establishment from
+        :meth:`list_establishments`.
+
+        Args:
+            state_code: State code.
+            dist_code: District code.
+            court_complex_code: Court complex code (bare or dropdown form).
+            est_code: Establishment code, for complexes that need one.
+            act_code: Act code from :meth:`list_acts` for this court.
+            section: Section, matched exactly. Letters, digits and spaces,
+                at most 15 characters. Empty means every section.
+            status_filter: "Pending", "Disposed", or "Both" (two requests).
+            year: Registration year, or an inclusive ``(start, end)`` range,
+                applied client-side.
+            dedupe: Collapse repeated rows to one per CNR.
+
+        Returns:
+            List of CaseInfo.
+
+        Raises:
+            ValueError: On an invalid section or status filter.
+        """
+        validate_section(section, max_len=endpoints.SECTION_MAX_LEN)
+        statuses = {
+            "Pending": ["Pending"],
+            "Disposed": ["Disposed"],
+            "Both": ["Pending", "Disposed"],
+        }.get(status_filter)
+        if statuses is None:
+            raise ValueError(
+                f"status_filter must be 'Pending', 'Disposed' or 'Both', got {status_filter!r}"
+            )
+        court_complex_code = self._bare_complex_code(court_complex_code)
+
+        results: list[CaseInfo] = []
+        for status in statuses:
+
+            def build_form(captcha: str, status: str = status) -> dict:
+                return endpoints.case_status_by_act_form(
+                    state_code=state_code,
+                    dist_code=dist_code,
+                    court_complex_code=court_complex_code,
+                    est_code=est_code,
+                    act_code=act_code,
+                    section=section,
+                    status_filter=status,
+                    captcha=captcha,
+                )
+
+            result = await self._post_with_captcha_retry(
+                "casestatus/submitAct",
+                build_form,
+                state_code=state_code,
+                dist_code=dist_code,
+                court_complex_code=court_complex_code,
+                est_code=est_code,
+            )
+            rows = parse_case_status_html(result.get("act_data", ""))
+            for r in rows:
+                r.status = status
+            results.extend(rows)
+
+        results = filter_by_year(results, year)
+        return dedupe_by_cnr(results) if dedupe else results
 
     # ------------------------------------------------------------------
     # Court orders

@@ -10,7 +10,7 @@ import respx
 from bharat_courts.captcha.base import CaptchaSolver
 from bharat_courts.hcservices.parser import CaptchaError
 from bharat_courts.judgments import endpoints
-from bharat_courts.judgments.client import JudgmentSearchClient
+from bharat_courts.judgments.client import JudgmentSearchClient, normalize_act_text
 
 
 class _FixedCaptchaSolver(CaptchaSolver):
@@ -146,3 +146,86 @@ async def test_search_pagination_uses_idisplaystart():  # noqa: N802
     assert captured["body"]["iDisplayStart"] == ["20"]
     assert captured["body"]["iDisplayLength"] == ["10"]
     assert captured["body"]["search_txt1"] == ["x"]
+
+
+# -- act filter -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Negotiable Instruments Act, 1881", "Negotiable Instruments Act"),
+        ("  NEGOTIABLE  ", "NEGOTIABLE"),
+        ("Arbitration & Conciliation Act, 1996", "Arbitration Conciliation Act"),
+    ],
+)
+def test_normalize_act_text(raw, expected):
+    assert normalize_act_text(raw) == expected
+
+
+def test_normalize_act_text_rejects_no_letters():
+    with pytest.raises(ValueError):
+        normalize_act_text("1881, 138")
+
+
+@respx.mock
+async def test_search_by_act_alone_sends_act_fields():
+    """An act search needs no keywords; the act is normalised before sending."""
+    _setup_auth_routes(respx)
+    captured: dict = {}
+
+    def search_route(request: httpx.Request) -> httpx.Response:
+        from urllib.parse import parse_qs
+
+        captured["body"] = parse_qs(request.content.decode(), keep_blank_values=True)
+        return httpx.Response(200, json=_SAMPLE_RESPONSE)
+
+    respx.post(endpoints.SEARCH_RESULTS_URL).mock(side_effect=search_route)
+
+    async with JudgmentSearchClient(captcha_solver=_FixedCaptchaSolver()) as client:
+        sr = await client.search(act="Negotiable Instruments Act, 1881", section="138")
+
+    assert sr.total_count == 54122
+    assert captured["body"]["search_txt1"] == [""]
+    assert captured["body"]["act_txt"] == ["Negotiable Instruments Act"]
+    assert captured["body"]["section_txt"] == ["138"]
+
+
+async def test_search_without_text_or_act_raises_before_captcha():
+    async with JudgmentSearchClient(captcha_solver=_EmptyCaptchaSolver()) as client:
+        with pytest.raises(ValueError, match="search_text, act"):
+            await client.search()
+
+
+@respx.mock
+async def test_search_refusal_envelope_raises_value_error_and_keeps_token():
+    """The portal refuses bad act text with a non-JSON envelope, not a CAPTCHA error."""
+    _setup_auth_routes(respx)
+    token = "ab" * 32
+    respx.post(endpoints.SEARCH_RESULTS_URL).mock(
+        return_value=httpx.Response(200, text=f"Act should be characters..! <br/>#####{token}")
+    )
+
+    async with JudgmentSearchClient(captcha_solver=_FixedCaptchaSolver()) as client:
+        with pytest.raises(ValueError, match="Act should be characters"):
+            await client.search("cheque")
+        assert client._app_token == token
+
+
+@respx.mock
+async def test_list_acts_filters_debris():
+    _setup_auth_routes(respx)
+    respx.post(endpoints.GET_DATA_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "res_act1": ["[", "POLICE ACT", " Government Savings Banks Act "],
+                "app_token": "t",
+            },
+        )
+    )
+
+    async with JudgmentSearchClient(captcha_solver=_FixedCaptchaSolver()) as client:
+        acts = await client.list_acts()
+
+    assert acts == ["POLICE ACT", "Government Savings Banks Act"]

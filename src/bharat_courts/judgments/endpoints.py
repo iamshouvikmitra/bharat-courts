@@ -29,6 +29,7 @@ CAPTCHA_IMAGE_URL = f"{BASE_URL}/vendor/securimage/securimage_show.php"
 CHECK_CAPTCHA_URL = f"{BASE_URL}/?p=pdf_search/checkCaptcha"
 SEARCH_RESULTS_URL = f"{BASE_URL}/?p=pdf_search/home"
 OPEN_PDF_CAPTCHA_URL = f"{BASE_URL}/?p=pdf_search/openpdfcaptcha"
+GET_DATA_URL = f"{BASE_URL}/?p=pdf_search/get_data"
 
 
 def check_captcha_form(
@@ -63,6 +64,8 @@ def search_results_form(
     court_type: str = "2",
     page: int = 1,
     page_size: int = 10,
+    act: str = "",
+    section: str = "",
 ) -> str:
     """Build URL-encoded form body for the DataTables AJAX search call.
 
@@ -76,6 +79,11 @@ def search_results_form(
 
     Pagination uses ``iDisplayStart = (page - 1) * page_size`` and
     ``iDisplayLength = page_size``.
+
+    ``act`` / ``section`` fill the portal's act refinement (``act_txt`` /
+    ``section_txt``). It is a match on the judgment text, not a structured
+    field, and ``act`` must be letters and spaces only — see
+    :func:`bharat_courts.judgments.client.normalize_act_text`.
     """
     start = max(0, (page - 1) * page_size)
     pairs: list[tuple[str, str]] = [
@@ -103,8 +111,8 @@ def search_results_form(
         ("sel_search_by", "phrase"),
         ("sections", "undefined"),
         ("judge_txt", ""),
-        ("act_txt", ""),
-        ("section_txt", ""),
+        ("act_txt", act),
+        ("section_txt", section),
         ("judge_val", ""),
         ("act_val", ""),
         ("year_val", ""),

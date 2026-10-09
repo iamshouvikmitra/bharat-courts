@@ -1,6 +1,7 @@
 """Tests for HC Services client using respx mocks."""
 
 from pathlib import Path
+from urllib.parse import parse_qs
 
 import pytest
 import respx
@@ -249,3 +250,92 @@ async def test_cnr_lookup_rejects_malformed(bad):
     client = HCServicesClient()
     with pytest.raises(ValueError, match="16 alphanumeric"):
         await client.case_status_by_cnr(bad)
+
+
+# ------------------------------------------------------------------
+# Act search
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_acts(fast_config, captcha_solver):
+    raw = (FIXTURES_DIR / "hcservices_act_list.txt").read_text()
+
+    with respx.mock:
+        respx.get(MAIN_PAGE_URL).mock(return_value=Response(200, text="<html></html>"))
+        route = respx.post(endpoints.FILL_ACT_TYPE_URL).mock(return_value=Response(200, text=raw))
+
+        async with HCServicesClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            acts = await client.list_acts(get_court("delhi"), search="negotiable")
+
+    assert acts["18"] == "NEGOTIABLE INSTRUMENTS ACT, 1881"
+    body = parse_qs(route.calls[0].request.content.decode())
+    assert body["caseStatusSearchType"] == ["CSact"]
+    assert body["state_code"] == ["26"]
+    assert body["search_act"] == ["negotiable"]
+
+
+@pytest.mark.asyncio
+async def test_case_status_by_act(fast_config, captcha_solver):
+    raw = (FIXTURES_DIR / "hcservices_act_search.json").read_text()
+
+    with respx.mock:
+        respx.get(MAIN_PAGE_URL).mock(return_value=Response(200, text="<html></html>"))
+        respx.get(CAPTCHA_IMAGE_URL).mock(return_value=Response(200, content=b"img"))
+        route = respx.post(endpoints.SHOW_RECORDS_URL).mock(return_value=Response(200, text=raw))
+
+        async with HCServicesClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            results = await client.case_status_by_act(
+                get_court("delhi"), act_code="1", section="302", status_filter="Disposed"
+            )
+
+    # action_code rides in the URL, the act fields in the body
+    assert route.calls[0].request.url.params["action_code"] == "showRecords"
+    body = parse_qs(route.calls[0].request.content.decode())
+    assert body["caseStatusSearchType"] == ["CSact"]
+    assert body["actcode"] == ["1"]
+    assert body["under_sec"] == ["302"]
+    assert body["f"] == ["Disposed"]
+    # five rows, one CNR repeated -> four cases
+    assert len(results) == 4
+    assert all(r.status == "Disposed" and r.court_name == "Delhi High Court" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_case_status_by_act_both_makes_two_requests(fast_config, captcha_solver):
+    raw = (FIXTURES_DIR / "hcservices_act_search.json").read_text()
+
+    with respx.mock:
+        respx.get(MAIN_PAGE_URL).mock(return_value=Response(200, text="<html></html>"))
+        respx.get(CAPTCHA_IMAGE_URL).mock(return_value=Response(200, content=b"img"))
+        route = respx.post(endpoints.SHOW_RECORDS_URL).mock(return_value=Response(200, text=raw))
+
+        async with HCServicesClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            results = await client.case_status_by_act(
+                get_court("delhi"), act_code="1", status_filter="Both", dedupe=False, year=2026
+            )
+
+    statuses = [parse_qs(c.request.content.decode())["f"] for c in route.calls]
+    assert statuses == [["Pending"], ["Disposed"]]
+    # three 2026 rows per response, kept apart because dedupe is off
+    assert len(results) == 6
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"section": "138/141"}, "letters, digits and spaces"),
+        ({"section": "1" * 101}, "at most 100"),
+        ({"status_filter": "All"}, "status_filter"),
+    ],
+)
+async def test_case_status_by_act_validates_before_any_request(
+    fast_config, captcha_solver, kwargs, match
+):
+    with respx.mock(assert_all_called=False) as mock:
+        async with HCServicesClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            with pytest.raises(ValueError, match=match):
+                await client.case_status_by_act(get_court("delhi"), act_code="18", **kwargs)
+
+    assert mock.calls.call_count == 0

@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from urllib.parse import parse_qs
 
 import pytest
 import respx
@@ -812,3 +813,82 @@ async def test_full_dropdown_complex_value_is_normalised(fast_config, captcha_so
     set_body = set_data.calls.last.request.content.decode()
     assert "court_complex_code=1260008" in set_body
     assert "%40" not in set_body.split("court_complex_code=")[1].split("&")[0]
+
+
+# ------------------------------------------------------------------
+# Act search
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_acts(fast_config, captcha_solver):
+    options = (
+        '<option value="">Select Act Type</option>'
+        '<option value="18">Negotiable Instruments Act</option>'
+        '<option value="523">Bharatiya Nyaya Sanhita</option>'
+    )
+
+    with respx.mock:
+        _mock_session_init()
+        respx.post(url__regex=r".*getCaptcha").mock(return_value=_ajax_response())
+        respx.post(url__regex=r".*set_data").mock(return_value=_ajax_response())
+        route = respx.post(url__regex=r".*fillActType").mock(
+            return_value=_ajax_response(act_list=options)
+        )
+
+        async with DistrictCourtClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            acts = await client.list_acts("26", "1", "1260001@1,2,3,4@Y", est_code="2")
+
+    assert acts == {"18": "Negotiable Instruments Act", "523": "Bharatiya Nyaya Sanhita"}
+    body = parse_qs(route.calls[0].request.content.decode())
+    assert body["court_complex_code"] == ["1260001"]
+    assert body["est_code"] == ["2"]
+
+
+@pytest.mark.asyncio
+async def test_case_status_by_act(fast_config, captcha_solver):
+    act_html = (FIXTURES_DIR / "districtcourts_act_search.html").read_text()
+
+    with respx.mock:
+        _mock_session_init()
+        respx.post(url__regex=r".*getCaptcha").mock(return_value=_ajax_response())
+        respx.post(url__regex=r".*set_data").mock(return_value=_ajax_response())
+        route = respx.post(url__regex=r".*submitAct").mock(
+            return_value=_ajax_response(act_data=act_html)
+        )
+
+        async with DistrictCourtClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            results = await client.case_status_by_act(
+                state_code="26",
+                dist_code="1",
+                court_complex_code="1260001",
+                est_code="1",
+                act_code="18",
+                section="138",
+            )
+
+    body = parse_qs(route.calls[0].request.content.decode())
+    assert body["actcode"] == ["18"]
+    assert body["under_sec"] == ["138"]
+    assert body["case_status"] == ["Pending"]
+    assert body["act_captcha_code"] == ["test123"]
+    assert len(results) == 23
+    assert results[0].cnr_number == "DLNE010023672026"
+    assert all(r.status == "Pending" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_case_status_by_act_rejects_long_section(fast_config, captcha_solver):
+    """The district form caps under_sec at 15, tighter than the HC form's 100."""
+    with respx.mock(assert_all_called=False) as mock:
+        async with DistrictCourtClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            with pytest.raises(ValueError, match="at most 15"):
+                await client.case_status_by_act(
+                    state_code="26",
+                    dist_code="1",
+                    court_complex_code="1260001",
+                    act_code="18",
+                    section="1" * 16,
+                )
+
+    assert mock.calls.call_count == 0
