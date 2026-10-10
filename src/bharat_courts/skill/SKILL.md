@@ -20,6 +20,9 @@ Async Python SDK. Three things to know:
 | "Find judgments by Justice X in 2020" | **`Judgments().find(judge="X", year=2020)`** |
 | "Get the PDF of judgment with CNR Y" | **`Judgments().find(cnr="Y")` + `fetch_pdf`** |
 | "Cases mentioning right to privacy" | **`Judgments().find(text="right to privacy")`** (routes to live full-text) |
+| "Pending NI Act s.138 cases in Delhi HC" / "cases filed under act X" | **`ActSearch().cases(act="NI Act", section="138", courts="delhi")`** |
+| "Judgments discussing section 138 of the NI Act" | **`Judgments().find(act="Negotiable Instruments Act", section="138")`** (text match) |
+| "What is IPC 302 under the new code?" | **`successor_sections("ipc", "302")`** → BNS 103(1) |
 | "All Delhi HC writ petitions in 2020 mentioning Tata" | **`Judgments().find(text="tata", court="delhi", year=2020)`** (mixed → archive title match) |
 | Bulk pull "all 18k Delhi 2020 judgments" | `ArchiveClient.iter_judgments` (facade doesn't stream) |
 | "What's the status of case X right now?" / "Next hearing?" | `HCServicesClient.case_status` / `DistrictCourtClient.case_status` |
@@ -330,9 +333,41 @@ asyncio.run(main())
 
 | Method | Returns | Description |
 |---|---|---|
-| `find(*, text=None, court=None, year=None, judge=None, party=None, citation=None, cnr=None, source="auto", limit=50)` | `list[Judgment]` | Federated search; picks archive vs live by query shape (see routing table above). |
+| `find(*, text=None, court=None, year=None, judge=None, party=None, citation=None, cnr=None, act=None, section=None, source="auto", limit=50)` | `list[Judgment]` | Federated search; picks archive vs live by query shape (see routing table above). `act=` → live (judgments mentioning the act). |
 | `fetch_pdf(judgment_or_cnr, *, language="english")` | `bytes` | PDF for archive judgments and CNR strings. Raises `NotImplementedError` for live `Judgment` objects (use `JudgmentSearchClient.download_pdf` for those). |
 | `live_to_judgment(jr)` | `Judgment` | Module-level helper if you're calling the live client directly and want the unified shape. |
+
+### Search by act
+
+Two different questions — never conflate them in an answer:
+
+- **Cases registered under an act** (the court's own record): `ActSearch.cases(...)`.
+- **Judgments that mention an act** (text match): `Judgments().find(act=...)` / `ActSearch.judgments(...)`.
+
+```python
+from bharat_courts import ActSearch, successor_sections
+
+async with ActSearch() as s:
+    res = await s.cases(
+        act="IPC",
+        section="302",
+        courts=["delhi", "gujarat"],  # or "all-hc"
+        status="Pending",  # "Pending" | "Disposed" | "Both" (Both = 2× CAPTCHAs)
+        year=(2023, 2026),  # registration year, filtered after download
+        include_successor=True,  # also BNS 103 — cases since 1 July 2024 use BNS
+    )
+    res.hits  # ActCaseHit: .case (CaseInfo), .court, .act_code, .act_name, .section
+    res.resolution  # per court: codes the act resolved to; [] = NOT ON THAT COURT'S LIST
+    res.errors  # per court failures; other courts' hits are kept
+```
+
+What to tell the user:
+
+- **An empty `resolution[court]` means the act isn't on that court's list** (e.g. Allahabad HC lists no BNS) — not that there are no such cases. Say so explicitly.
+- **Sections match exactly** and can't contain `/` or brackets: search `["138", "141"]` separately, and BNS `103` rather than `103(1)`.
+- **Cost:** one CAPTCHA per court × act code × section × status. `courts="all-hc"` with `status="Both"` is ~50+ solves — confirm before running broad searches.
+- **District courts:** `ActSearch` covers High Courts only. For a district complex, loop `DistrictCourtClient.list_establishments` → `list_acts` → `bharat_courts.acts.resolve` → `case_status_by_act` per establishment (cases sit with the establishment that tries them), or use the CLI's `districtcourts search-by-act --all-establishments`.
+- **`with_judgments=True`** attaches archived judgments to disposed hits; the archive lags and has coverage gaps, so many hits will have `judgment=None`.
 
 ### CNR-prefix helper
 
@@ -389,6 +424,8 @@ Use `get_court(code)` with any of these codes:
 | `list_case_types(court, *, bench_code="1")` | No | `dict[str, str]` | Case type codes for a bench |
 | `case_status(court, *, case_type, case_number, year, bench_code="1")` | Yes | `list[CaseInfo]` | Search by case number |
 | `case_status_by_party(court, *, party_name, year, bench_code="1", status_filter="Both")` | Yes | `list[CaseInfo]` | Search by party name |
+| `list_acts(court, *, bench_code="1", search="")` | No | `dict[str, str]` | Act codes for a bench (court-local!) |
+| `case_status_by_act(court, *, act_code, section="", status_filter="Pending", bench_code="1", year=None)` | Yes | `list[CaseInfo]` | Cases registered under an act; `"Both"` = 2 requests |
 | `court_orders(court, *, case_type, case_number, year, bench_code="1")` | Yes | `list[CaseOrder]` | Get orders for a case |
 | `cause_list(court, *, civil=True, bench_code="1", causelist_date="")` | Yes | `list[CauseListPDF]` | Cause list PDFs (date format: DD-MM-YYYY) |
 | `download_order_pdf(pdf_url)` | No | `bytes` | Download order PDF |
@@ -397,7 +434,7 @@ Use `get_court(code)` with any of these codes:
 
 | Method | CAPTCHA | Returns | Description |
 |--------|---------|---------|-------------|
-| `search(search_text, *, page=1, search_opt="PHRASE", court_type="2", max_captcha_attempts=3)` | Yes | `SearchResult` | Search judgments by keyword |
+| `search(search_text="", *, page=1, search_opt="PHRASE", court_type="2", act="", section="", max_captcha_attempts=3)` | Yes | `SearchResult` | Search judgments by keyword and/or act mentioned |
 | `search_all(search_text, *, search_opt="PHRASE", court_type="2", max_captcha_attempts=3)` | Yes | `AsyncIterator[SearchResult]` | Paginate all results (auto re-auth on session expiry) |
 | `download_pdf(judgment)` | No | `JudgmentResult` | Download PDF for a single judgment (sets `pdf_bytes` in place) |
 | `download_pdfs(judgments, *, batch_size=25)` | No | `list[JudgmentResult]` | Batch download with auto session reset |
@@ -418,6 +455,8 @@ All search methods require `state_code`, `dist_code`, `court_complex_code`, and 
 | `list_case_types(state_code, dist_code, complex_code, est_code="")` | No | `dict[str, str]` | Case type codes |
 | `case_status(*, state_code, dist_code, court_complex_code, est_code="", case_type, case_number, year)` | Yes | `list[CaseInfo]` | Search by case number |
 | `case_status_by_party(*, state_code, dist_code, court_complex_code, est_code="", party_name, year, status_filter="Both")` | Yes | `list[CaseInfo]` | Search by party name |
+| `list_acts(state_code, dist_code, complex_code, est_code="", search="")` | No | `dict[str, str]` | Act codes for one establishment |
+| `case_status_by_act(*, state_code, dist_code, court_complex_code, est_code="", act_code, section="", status_filter="Pending", year=None)` | Yes | `list[CaseInfo]` | Cases under an act — one establishment per call |
 | `court_orders(*, state_code, dist_code, court_complex_code, est_code="", case_type, case_number, year)` | Yes | `list[CaseOrder]` | Get orders for a case |
 | `cause_list(*, state_code, dist_code, court_complex_code, est_code="", court_no="", causelist_date="", civil=True)` | Yes | `list[CauseListEntry]` | Cause list entries |
 

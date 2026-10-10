@@ -148,6 +148,7 @@ nav:
       - District Courts: guides/district-courts.md
       - Calcutta High Court: guides/calcutta-hc.md
       - Judgment search: guides/judgment-search.md
+      - Search by act: guides/act-search.md
       - Supreme Court: guides/supreme-court.md
       - Historical archive: guides/archive.md
       - CAPTCHA solving: guides/captcha.md
@@ -155,6 +156,7 @@ nav:
   - API Reference:
       - reference/index.md
       - Judgments facade: reference/facade.md
+      - Act search: reference/acts.md
       - Live clients: reference/clients.md
       - Archive client: reference/archive.md
       - Data models: reference/models.md

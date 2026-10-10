@@ -55,6 +55,12 @@ set, whether `text` is set, and whether any *structured* filter
 | — | set | yes | **archive** | `text` folds into a title-substring match |
 | — | — | — | `ValueError` | Need at least one filter |
 
+`act=` is the one exception to the table: with no `cnr`, an `act` filter always goes
+**live**, whatever else is set, because only the judgments portal can filter by act.
+It finds judgments whose text *mentions* the act. For cases a court *registered
+under* an act, see [Search by act](act-search.md). Forcing `source="archive"` with
+`act=` raises `ValueError`, since the archive has no act data.
+
 The precedence is exactly that order: a `cnr` always wins, then text-only goes live,
 then anything structured goes to the archive. Each decision is logged at INFO under
 the `bharat_courts.facade` logger (`Judgments.find routing → archive`), so routing is
@@ -100,6 +106,8 @@ async def find(
     party: str | None = None,
     citation: str | None = None,
     cnr: str | None = None,
+    act: str | None = None,
+    section: str | None = None,
     source: Source = "auto",      # Literal["auto", "archive", "live"]
     limit: int = 50,
 ) -> list[Judgment]:
@@ -116,6 +124,8 @@ All parameters are keyword-only.
 | `party` | `str` | Party-name substring (title + party columns on the archive). Structured filter. |
 | `citation` | `str` | Citation substring. Structured filter. |
 | `cnr` | `str` | Case Number Record id. Routes straight to the archive via its 4-letter prefix. |
+| `act` | `str` | Judgments mentioning this act (live). `text` may then be omitted. |
+| `section` | `str` | Section to pair with `act`; needs `act`. |
 | `source` | `"auto" \| "archive" \| "live"` | Routing override. Default `"auto"`. |
 | `limit` | `int` | Max rows. Default `50`. For the live route, page size is capped at 25 internally and trimmed to `limit`. |
 
