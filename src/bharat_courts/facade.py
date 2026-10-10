@@ -11,6 +11,7 @@ Routing rules (``source="auto"`` mode):
 filters                                            backend
 ================================================  ========================
 ``cnr=`` set                                       archive (CNR prefix routing)
+``act=`` set                                       live (only it filters by act)
 ``text=`` set, no structured filters               live (only it does full-text)
 structured filters only (judge/party/year/…)       archive (faster, no CAPTCHA)
 ``text=`` + structured                             archive (text falls back to title match)
@@ -18,6 +19,11 @@ nothing                                            ``ValueError``
 ================================================  ========================
 
 Use ``source="archive"`` or ``source="live"`` to force a specific backend.
+
+``act=`` finds judgments whose text *mentions* the act. For cases a court
+*registered under* an act, use :class:`bharat_courts.actsearch.ActSearch`.
+The archive has no act data, so ``act=`` with ``source="archive"`` raises
+rather than quietly falling back to a title match.
 
 Both backends are lazy-initialised — install only what you need:
 
@@ -146,16 +152,25 @@ class Judgments:
         party: str | None = None,
         citation: str | None = None,
         cnr: str | None = None,
+        act: str | None = None,
+        section: str | None = None,
         source: Source = "auto",
         limit: int = 50,
     ) -> list[Judgment]:
-        """Find judgments. See module docstring for routing rules."""
+        """Find judgments. See module docstring for routing rules.
+
+        ``act`` / ``section`` filter to judgments whose text mentions the
+        act (judgments portal only); ``text`` may then be omitted.
+        """
+        if section and not act:
+            raise ValueError("section= needs act= as well")
         structured = any(x is not None for x in (court, year, judge, party, citation))
         backend = self._resolve_source(
             source=source,
             text=text,
             cnr=cnr,
             structured=structured,
+            act=act,
         )
         _log.info("Judgments.find routing → %s", backend)
 
@@ -170,7 +185,9 @@ class Judgments:
                 cnr=cnr,
                 limit=limit,
             )
-        return await self._find_live(text=text or "", limit=limit)
+        return await self._find_live(
+            text=text or "", act=act or "", section=section or "", limit=limit
+        )
 
     async def fetch_pdf(
         self,
@@ -206,7 +223,13 @@ class Judgments:
         text: str | None,
         cnr: str | None,
         structured: bool,
+        act: str | None = None,
     ) -> Literal["archive", "live"]:
+        if act and source == "archive":
+            raise ValueError(
+                "act= needs the live judgments portal; the archive has no act data. "
+                "Drop source='archive', or use ActSearch for cases registered under an act."
+            )
         if source == "archive":
             return "archive"
         if source == "live":
@@ -214,12 +237,14 @@ class Judgments:
         # auto
         if cnr:
             return "archive"
+        if act:
+            return "live"
         if text and not structured:
             return "live"
         if structured:
             return "archive"
         raise ValueError(
-            "find() needs at least one of text, cnr, or a structured filter "
+            "find() needs at least one of text, cnr, act, or a structured filter "
             "(court / year / judge / party / citation)."
         )
 
@@ -254,16 +279,18 @@ class Judgments:
             limit=limit,
         )
 
-    async def _find_live(self, *, text: str, limit: int) -> list[Judgment]:
-        if not text:
+    async def _find_live(
+        self, *, text: str, limit: int, act: str = "", section: str = ""
+    ) -> list[Judgment]:
+        if not text and not act:
             raise ValueError(
-                "Live source needs `text=` (the judgments portal only supports "
-                "full-text search; structured filters aren't wired up yet)."
+                "Live source needs `text=` or `act=` (the judgments portal only "
+                "supports full-text and act search; other filters aren't wired up yet)."
             )
         live = await self._get_live()
         # ``search`` returns a SearchResult of JudgmentResult. Map and trim.
         page_size = min(limit, 25)  # portal default; larger pages slower
-        sr = await live.search(text, page=1, page_size=page_size)
+        sr = await live.search(text, page=1, page_size=page_size, act=act, section=section)
         items = [live_to_judgment(jr) for jr in sr.items[:limit]]
         return items
 

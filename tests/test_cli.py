@@ -85,6 +85,7 @@ def test_top_level_help_lists_groups():
         "calcuttahc",
         "judgments",
         "sci",
+        "acts",
         "courts",
         "version",
     ):
@@ -481,3 +482,140 @@ def test_sci_recent_human(monkeypatch):
 def test_safe_filename(raw, expected_prefix):
     out = cli_module._safe_filename(raw)
     assert out.startswith(expected_prefix) or out == expected_prefix
+
+
+# ---------------------------------------------------------------------------
+# Search by act
+# ---------------------------------------------------------------------------
+
+_NI_CASE = CaseInfo(
+    case_number="372/2022",
+    case_type="CRL.M.C.",
+    cnr_number="DLHC010418092023",
+    petitioner="A",
+    respondent="B",
+    status="Pending",
+)
+
+
+def test_hcservices_acts_json(monkeypatch):
+    _patch_async_method(
+        monkeypatch,
+        "bharat_courts.hcservices.client.HCServicesClient",
+        "list_acts",
+        {"18": "NEGOTIABLE INSTRUMENTS ACT, 1881"},
+    )
+    result = CliRunner().invoke(main, ["--json", "hcservices", "acts", "delhi"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {"18": "NEGOTIABLE INSTRUMENTS ACT, 1881"}
+
+
+def test_hcservices_search_by_act_code(monkeypatch):
+    calls = []
+
+    async def _impl(self, court, **kwargs):
+        calls.append(kwargs)
+        return [_NI_CASE]
+
+    from bharat_courts.hcservices.client import HCServicesClient
+
+    monkeypatch.setattr(HCServicesClient, "case_status_by_act", _impl)
+    result = CliRunner().invoke(
+        main,
+        [
+            "hcservices", "search-by-act", "delhi", "--act-code", "18",
+            "--section", "138", "--section", "141", "--status", "both", "--year", "2020-2024",
+        ],
+    )  # fmt: skip
+    assert result.exit_code == 0, result.output
+    assert [c["section"] for c in calls] == ["138", "141"]
+    assert calls[0]["status_filter"] == "Both"
+    assert calls[0]["year"] == (2020, 2024)
+    # the same case under both sections is shown once
+    assert "Found 1 case(s)" in result.output
+    assert "DLHC010418092023" in result.output
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["hcservices", "search-by-act", "delhi"],
+        ["hcservices", "search-by-act", "delhi", "--act", "NI", "--act-code", "18"],
+        ["hcservices", "search-by-act", "delhi", "--act-code", "18", "--include-successor"],
+        ["hcservices", "search-by-act", "delhi", "--act-code", "18", "--year", "20x"],
+        ["judgments", "search"],
+        ["judgments", "search", "--text", "x", "--section", "138"],
+    ],
+)
+def test_act_commands_reject_bad_usage(args):
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 2, result.output
+
+
+def test_acts_search_prints_resolution_and_errors(monkeypatch):
+    from bharat_courts.acts import ActMatch
+    from bharat_courts.actsearch import ActCaseHit, ActSearch, ActSearchResult
+    from bharat_courts.courts import get_court
+
+    seen = {}
+
+    async def _cases(self, **kwargs):
+        seen.update(kwargs)
+        return ActSearchResult(
+            act="NI Act",
+            hits=[
+                ActCaseHit(
+                    case=_NI_CASE,
+                    court=get_court("delhi"),
+                    act_code="18",
+                    act_name="NEGOTIABLE INSTRUMENTS ACT, 1881",
+                    section="138",
+                )
+            ],
+            resolution={
+                "delhi": [ActMatch("18", "NEGOTIABLE INSTRUMENTS ACT, 1881", "alias")],
+                "allahabad": [],
+            },
+            errors={"gujarat": "act 492: CaptchaError: gave up"},
+        )
+
+    monkeypatch.setattr(ActSearch, "cases", _cases)
+    result = CliRunner().invoke(
+        main,
+        ["acts", "search", "--act", "NI Act", "--courts", "delhi, allahabad,gujarat",
+         "--section", "138"],
+    )  # fmt: skip
+    assert result.exit_code == 0, result.output
+    assert seen["courts"] == ["delhi", "allahabad", "gujarat"]
+    assert seen["section"] == ["138"]
+    assert seen["status"] == "Pending"
+    assert "NEGOTIABLE INSTRUMENTS ACT, 1881 [18]" in result.output
+    assert "allahabad: 'NI Act' is not on this court's act list" in result.output
+    assert "gujarat: act 492: CaptchaError" in result.output
+    assert "DLHC010418092023" in result.output
+
+
+def test_acts_successor():
+    result = CliRunner().invoke(main, ["acts", "successor", "IPC", "302"])
+    assert result.exit_code == 0, result.output
+    assert "IPC 302 → BNS 103(1)" in result.output
+    assert "search section: 103" in result.output
+
+
+def test_judgments_search_by_act_only(monkeypatch):
+    seen = {}
+
+    async def _impl(self, search_text, **kwargs):
+        seen.update(kwargs, text=search_text)
+        return SearchResult(items=[], total_count=0)
+
+    from bharat_courts.judgments.client import JudgmentSearchClient
+
+    monkeypatch.setattr(JudgmentSearchClient, "search", _impl)
+    result = CliRunner().invoke(
+        main, ["judgments", "search", "--act", "Negotiable Instruments Act", "--section", "138"]
+    )
+    assert result.exit_code == 0, result.output
+    assert seen["text"] == ""
+    assert seen["act"] == "Negotiable Instruments Act"
+    assert seen["section"] == "138"

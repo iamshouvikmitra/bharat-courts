@@ -12,7 +12,7 @@ queries run via ``asyncio.to_thread`` so they don't block the event loop.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Self
 
 from bharat_courts.archive.metadata import _ArchiveQuery
@@ -117,7 +117,7 @@ class ArchiveClient:
         judge: str | None = None,
         party: str | None = None,
         citation: str | None = None,
-        cnr: str | None = None,
+        cnr: str | Sequence[str] | None = None,
         limit: int = 50,
     ) -> list[Judgment]:
         """Search judgments in the archive.
@@ -138,14 +138,16 @@ class ArchiveClient:
             parquet has no citation column; filter is silently ignored.)
         :param cnr: Exact match on the CNR (Court Number Record). When ``court``
             isn't given, the CNR's 4-letter prefix is used to infer the right
-            court and avoid scanning all 25 HC partitions.
+            court and avoid scanning all 25 HC partitions. A list of CNRs
+            matches any of them in one query — pass ``court`` (and ideally
+            ``year``) with it, since no single prefix is inferred from a list.
         :param limit: Maximum results to return (split across sources if both
             queried).
         """
         resolved = self._resolve_court(court)
         # CNR-only queries: infer source from the prefix so we don't scan every
         # HC partition for an SCI CNR (or vice-versa).
-        if resolved is None and cnr:
+        if resolved is None and isinstance(cnr, str):
             resolved = infer_court_from_cnr(cnr)
 
         per_source_limit = limit if resolved is not None else max(1, limit // 2)

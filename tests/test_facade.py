@@ -32,6 +32,12 @@ from bharat_courts.models import Judgment, JudgmentResult, SearchResult
         # Explicit override beats auto
         (dict(source="live", text=None, cnr="DLHC...", structured=False), "live"),
         (dict(source="archive", text="bail", cnr=None, structured=False), "archive"),
+        # Act → live (only the judgments portal filters by act), even with
+        # structured filters that would otherwise send it to the archive
+        (dict(source="auto", text=None, cnr=None, structured=False, act="NI Act"), "live"),
+        (dict(source="auto", text="cheque", cnr=None, structured=True, act="NI Act"), "live"),
+        # ...but a CNR still wins
+        (dict(source="auto", text=None, cnr="DLHC...", structured=False, act="NI Act"), "archive"),
     ],
 )
 def test_resolve_source(kwargs, expected):
@@ -126,9 +132,10 @@ async def test_find_routes_text_to_live_path():
 
     live_called = {}
 
-    async def fake_find_live(*, text, limit):
+    async def fake_find_live(*, text, limit, act, section):
         live_called["text"] = text
         live_called["limit"] = limit
+        assert (act, section) == ("", "")
         return [live_to_judgment(_make_live_result())]
 
     async def archive_should_not_be_called(**kw):
@@ -331,3 +338,46 @@ async def test_fetch_pdf_cnr_string_routes_to_archive():
 
     await facade.fetch_pdf("DLHC010230802020")
     fake_archive.fetch_pdf.assert_awaited_once_with("DLHC010230802020", language="english")
+
+
+# ----- act filter -------------------------------------------------------
+
+
+def test_resolve_source_act_with_forced_archive_raises():
+    """The archive has no act data; a silent title-match fallback would mislead."""
+    with pytest.raises(ValueError, match="archive has no act data"):
+        Judgments._resolve_source(
+            source="archive", text=None, cnr=None, structured=False, act="NI Act"
+        )
+
+
+@pytest.mark.asyncio
+async def test_find_act_passes_act_and_section_to_live():
+    facade = Judgments.__new__(Judgments)
+    facade._archive = None
+    facade._live = None
+
+    fake_live = AsyncMock()
+    fake_live.search = AsyncMock(return_value=SearchResult(items=[_make_live_result()]))
+
+    async def get_live():
+        return fake_live
+
+    facade._get_live = get_live  # type: ignore[assignment]
+
+    results = await facade.find(act="Negotiable Instruments Act", section="138", limit=3)
+
+    assert len(results) == 1
+    kwargs = fake_live.search.await_args.kwargs
+    assert kwargs["act"] == "Negotiable Instruments Act"
+    assert kwargs["section"] == "138"
+    assert fake_live.search.await_args.args == ("",)
+
+
+@pytest.mark.asyncio
+async def test_find_section_without_act_raises():
+    facade = Judgments.__new__(Judgments)
+    facade._archive = None
+    facade._live = None
+    with pytest.raises(ValueError, match="section= needs act="):
+        await facade.find(text="cheque", section="138")
