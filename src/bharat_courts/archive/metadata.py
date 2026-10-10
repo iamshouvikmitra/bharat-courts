@@ -14,6 +14,7 @@ its credential discovery chain and uses unauthenticated requests.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,14 @@ def _from_clause(default_glob: str, paths_override: list[Path] | None) -> str:
         listed = ",".join(f"'{p.as_posix()}'" for p in paths_override)
         return f"read_parquet([{listed}], hive_partitioning=true)"
     return f"read_parquet('{default_glob}', hive_partitioning=true)"
+
+
+def _cnr_clause(cnr: str | Sequence[str]) -> tuple[str, list[str]]:
+    """``cnr = ?`` for one CNR, ``cnr IN (?, ...)`` for several."""
+    if isinstance(cnr, str):
+        return "cnr = ?", [cnr]
+    cnrs = list(cnr)
+    return f"cnr IN ({', '.join('?' * len(cnrs))})", cnrs
 
 
 class _ArchiveQuery:
@@ -80,7 +89,7 @@ class _ArchiveQuery:
         judge: str | None = None,
         party: str | None = None,
         citation: str | None = None,
-        cnr: str | None = None,
+        cnr: str | Sequence[str] | None = None,
         limit: int = 50,
         offset: int = 0,
         paths_override: list[Path] | None = None,
@@ -104,7 +113,7 @@ class _ArchiveQuery:
         judge: str | None,
         party: str | None,
         citation: str | None,
-        cnr: str | None,
+        cnr: str | Sequence[str] | None,
         limit: int,
         offset: int = 0,
         paths_override: list[Path] | None = None,
@@ -133,8 +142,9 @@ class _ArchiveQuery:
             params.append(f"%{citation}%")
 
         if cnr:
-            clauses.append("cnr = ?")
-            params.append(cnr)
+            clause, values = _cnr_clause(cnr)
+            clauses.append(clause)
+            params.extend(values)
 
         where = " AND ".join(clauses) if clauses else "TRUE"
         from_clause = _from_clause(SCI_METADATA_GLOB, paths_override)
@@ -163,7 +173,7 @@ class _ArchiveQuery:
         year: int | tuple[int, int] | None = None,
         judge: str | None = None,
         party: str | None = None,
-        cnr: str | None = None,
+        cnr: str | Sequence[str] | None = None,
         limit: int = 50,
         offset: int = 0,
         paths_override: list[Path] | None = None,
@@ -187,7 +197,7 @@ class _ArchiveQuery:
         year: int | tuple[int, int] | None,
         judge: str | None,
         party: str | None,
-        cnr: str | None,
+        cnr: str | Sequence[str] | None,
         limit: int,
         offset: int = 0,
         paths_override: list[Path] | None = None,
@@ -219,8 +229,9 @@ class _ArchiveQuery:
             params.append(f"%{party}%")
 
         if cnr:
-            clauses.append("cnr = ?")
-            params.append(cnr)
+            clause, values = _cnr_clause(cnr)
+            clauses.append(clause)
+            params.extend(values)
 
         where = " AND ".join(clauses) if clauses else "TRUE"
         # NOTE: do not project the ``court`` column. With ``hive_partitioning=true``

@@ -14,6 +14,8 @@ The JS var caseQryURL = "cases_qry/"
 
 from __future__ import annotations
 
+import re
+
 BASE_URL = "https://hcservices.ecourts.gov.in/hcservices"
 
 # Endpoint paths
@@ -26,6 +28,7 @@ CAUSE_LIST_URL = f"{BASE_URL}/cases/cases.php"
 COURT_ORDERS_URL = f"{BASE_URL}/cases_qry/index_qry.php"
 SHOW_RECORDS_URL = f"{INDEX_QRY_URL}?action_code=showRecords"
 FILL_CASE_TYPE_URL = f"{INDEX_QRY_URL}?action_code=fillCaseType"
+FILL_ACT_TYPE_URL = f"{INDEX_QRY_URL}?action_code=fillActType"
 PDF_DISPLAY_URL = f"{BASE_URL}/cases/display_pdf.php"
 
 
@@ -224,6 +227,101 @@ def advocate_cause_list_form(
         "caselist_date_dmy": causelist_date,
         "search_type": "3",
         "f": "date_case_list",
+    }
+
+
+#: The portal's own client-side check for ``under_sec``.
+_SECTION_RE = re.compile(r"^[0-9A-Za-z ]+$")
+
+#: ``under_sec`` input limit on the HC Services form.
+SECTION_MAX_LEN = 100
+
+
+def validate_section(section: str, *, max_len: int = SECTION_MAX_LEN) -> None:
+    """Raise unless ``section`` is something the portal will accept.
+
+    The server matches ``under_sec`` exactly — "13" does not find section
+    138 — and the form only takes letters, digits and spaces, so "138/141"
+    has to be two searches. Checked up front so a bad section costs neither
+    a session nor a CAPTCHA solve. An empty section is fine: it means every
+    section under the act.
+
+    Raises:
+        ValueError: On disallowed characters or an over-long value.
+    """
+    if not section:
+        return
+    if len(section) > max_len:
+        raise ValueError(f"section must be at most {max_len} characters, got {section!r}")
+    if not _SECTION_RE.match(section):
+        raise ValueError(
+            f"section may contain only letters, digits and spaces, got {section!r} "
+            "(search several sections separately)"
+        )
+
+
+def fill_act_type_form(
+    *,
+    state_code: str,
+    court_code: str = "1",
+    search_act: str = "",
+) -> dict[str, str]:
+    """Get the act list for a High Court bench.
+
+    Derived from the portal's ``fillActType()`` JS. Needs no CAPTCHA.
+    ``search_act`` narrows the list by substring; empty returns every act.
+    """
+    return {
+        "court_code": court_code,
+        "caseStatusSearchType": "CSact",
+        "court_complex_code": court_code,
+        "state_code": state_code,
+        "search_act": search_act,
+    }
+
+
+def case_status_by_act_form(
+    *,
+    state_code: str,
+    court_code: str = "1",
+    act_code: str,
+    section: str = "",
+    status_filter: str = "Pending",
+    captcha: str,
+) -> dict[str, str]:
+    """Build form data for case status search by act.
+
+    Derived from the ``CSact`` branch of ``funShowRecords()``; posts to
+    ``index_qry.php?action_code=showRecords`` like the other searches.
+
+    Note: the act branch takes **only** "Pending" or "Disposed" — unlike the
+    party search there is no "Both" — so the client splits that into two
+    requests.
+
+    Args:
+        state_code: HC state code from courts registry.
+        court_code: Bench code from fillHCBench (default "1" = principal).
+        act_code: Act code from :func:`fill_act_type_form`. Codes are local
+            to each court — IPC is "1" in Delhi but "535" in Gujarat.
+        section: Section, matched exactly. Empty means all sections.
+        status_filter: "Pending" or "Disposed".
+        captcha: Solved CAPTCHA text.
+
+    Raises:
+        ValueError: On any other status filter.
+    """
+    if status_filter not in ("Pending", "Disposed"):
+        raise ValueError(f"status_filter must be 'Pending' or 'Disposed', got {status_filter!r}")
+    return {
+        "court_code": court_code,
+        "state_code": state_code,
+        "court_complex_code": court_code,
+        "caseStatusSearchType": "CSact",
+        "captcha": captcha,
+        "search_act": "",
+        "actcode": act_code,
+        "f": status_filter,
+        "under_sec": section,
     }
 
 

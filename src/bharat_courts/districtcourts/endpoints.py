@@ -335,6 +335,70 @@ def case_status_by_party_form(
     }
 
 
+#: ``under_sec`` input limit on the district form (the HC form allows 100).
+SECTION_MAX_LEN = 15
+
+
+def fill_act_type_form(
+    *,
+    state_code: str,
+    dist_code: str,
+    court_complex_code: str,
+    est_code: str = "",
+    search_act: str = "",
+) -> dict[str, str]:
+    """Fill the act dropdown for a complex/establishment (no CAPTCHA).
+
+    Derived from ``fillActType()`` in ``js/common_header.js``. The list comes
+    back as HTML option fragments under ``act_list``. The JS sends
+    ``est_code`` only when the complex needs an establishment (flag ``Y``)
+    and an empty string otherwise.
+    """
+    return {
+        "state_code": state_code,
+        "dist_code": dist_code,
+        "court_complex_code": court_complex_code,
+        "est_code": est_code,
+        "search_act": search_act,
+    }
+
+
+def case_status_by_act_form(
+    *,
+    state_code: str,
+    dist_code: str,
+    court_complex_code: str,
+    est_code: str = "",
+    act_code: str,
+    section: str = "",
+    status_filter: str = "Pending",
+    captcha: str,
+) -> dict[str, str]:
+    """Form data for case status search by act (``casestatus/submitAct``).
+
+    Mirrors ``submitAct()`` in ``js/searchByCaseStatus.js``: the serialized
+    ``frm_act`` form plus the court codes. Results arrive as HTML under
+    ``act_data``.
+
+    Raises:
+        ValueError: On a status filter other than "Pending" or "Disposed" —
+            the form is a two-way radio with no "Both".
+    """
+    if status_filter not in ("Pending", "Disposed"):
+        raise ValueError(f"status_filter must be 'Pending' or 'Disposed', got {status_filter!r}")
+    return {
+        "search_act": "",
+        "actcode": act_code,
+        "under_sec": section,
+        "case_status": status_filter,
+        "act_captcha_code": captcha,
+        "state_code": state_code,
+        "dist_code": dist_code,
+        "court_complex_code": court_complex_code,
+        "est_code": est_code,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Court orders forms
 # ---------------------------------------------------------------------------

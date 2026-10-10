@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
+from urllib.parse import urlencode
 
 from bharat_courts.captcha import default_solver
 from bharat_courts.captcha.base import CaptchaSolver
@@ -38,6 +40,41 @@ from bharat_courts.models import JudgmentResult, SearchResult
 logger = logging.getLogger(__name__)
 
 _PDF_MAGIC = b"%PDF"
+
+#: An ``app_token`` as the portal issues it: 32–128 lowercase hex chars.
+_TOKEN_RE = re.compile(r"^[0-9a-f]{32,128}$")
+
+
+def _split_error_envelope(text: str) -> tuple[str, str] | None:
+    """Split the portal's non-JSON error reply, ``"<msg><br/>#####<token>"``.
+
+    Returns ``(message, token)`` — token empty if it doesn't look like one —
+    or ``None`` when ``text`` is not that envelope. The token is still valid
+    and must be carried forward, or the next call is refused.
+    """
+    if "#####" not in text:
+        return None
+    msg, _, token = text.partition("#####")
+    msg = re.sub(r"<br\s*/?>", " ", msg).strip()
+    token = token.strip()
+    return msg, token if _TOKEN_RE.match(token) else ""
+
+
+def normalize_act_text(act: str) -> str:
+    """Reduce an act name to what the portal's act filter accepts.
+
+    The filter takes letters and spaces only — "Negotiable Instruments Act,
+    1881" is refused with "Act should be characters..!" — so punctuation and
+    the year are dropped: that becomes "Negotiable Instruments Act". Partial
+    names match too ("NEGOTIABLE").
+
+    Raises:
+        ValueError: If nothing usable is left.
+    """
+    cleaned = " ".join(re.sub(r"[^A-Za-z ]+", " ", act).split())
+    if not cleaned:
+        raise ValueError(f"act must contain letters, got {act!r}")
+    return cleaned
 
 
 class JudgmentSearchClient:
@@ -100,11 +137,10 @@ class JudgmentSearchClient:
 
         # Length-error envelope: "<msg><br/>#####<hex token>"
         text = resp.text
-        if "#####" in text:
-            parts = text.split("#####", 1)
-            msg = parts[0].strip()
-            token = parts[1].strip() if len(parts) > 1 else ""
-            if token and 32 <= len(token) <= 128 and all(c in "0123456789abcdef" for c in token):
+        envelope = _split_error_envelope(text)
+        if envelope is not None:
+            msg, token = envelope
+            if token:
                 self._app_token = token
             logger.warning("CAPTCHA validate non-JSON response: %s", msg[:200])
             return False
@@ -146,6 +182,8 @@ class JudgmentSearchClient:
         court_type: str,
         page: int,
         page_size: int,
+        act: str = "",
+        section: str = "",
     ) -> dict:
         body = endpoints.search_results_form(
             search_text=search_text,
@@ -155,6 +193,8 @@ class JudgmentSearchClient:
             court_type=court_type,
             page=page,
             page_size=page_size,
+            act=act,
+            section=section,
         )
         resp = await self._http.post(
             endpoints.SEARCH_RESULTS_URL,
@@ -166,6 +206,15 @@ class JudgmentSearchClient:
         )
         # Portal occasionally prefixes the JSON with whitespace / blank lines.
         text = resp.text.lstrip()
+        envelope = _split_error_envelope(text)
+        if envelope is not None:
+            # A validation refusal ("Act should be characters..!"), not an
+            # expired session — retrying the same request cannot help, so it
+            # must not surface as the RuntimeError search_all re-auths on.
+            msg, token = envelope
+            if token:
+                self._app_token = token
+            raise ValueError(f"Judgment portal rejected the search: {msg}")
         try:
             data = json.loads(text)
         except json.JSONDecodeError as e:
@@ -176,35 +225,48 @@ class JudgmentSearchClient:
 
     async def search(
         self,
-        search_text: str,
+        search_text: str = "",
         *,
         page: int = 1,
         page_size: int = 10,
         search_opt: str = "PHRASE",
         court_type: str = "2",
+        act: str = "",
+        section: str = "",
         max_captcha_attempts: int = 5,
     ) -> SearchResult:
-        """Search for judgments by keyword.
+        """Search for judgments by keyword and/or act.
+
+        ``act`` narrows to judgments whose text **mentions** the act — a text
+        match, not the act a case was registered under. For that, use
+        ``case_status_by_act`` on the High Court or district clients.
 
         Args:
-            search_text: Keywords / phrase to search for.
+            search_text: Keywords / phrase to search for. May be empty when
+                ``act`` is given.
             page: 1-indexed page number.
             page_size: Rows per page (portal supports 10/25/50/100/1000).
             search_opt: ``"PHRASE"``, ``"ANY"``, or ``"ALL"``.
             court_type: ``"2"`` for High Courts, ``"3"`` for SCR.
+            act: Act name, full or partial. Punctuation and digits are
+                dropped (see :func:`normalize_act_text`).
+            section: Section to pair with ``act``, e.g. ``"138"``.
             max_captcha_attempts: Max CAPTCHA solve retries before giving up.
 
         Returns:
             ``SearchResult`` of :class:`JudgmentResult` items.
 
         Raises:
+            ValueError: If neither ``search_text`` nor ``act`` is given, or
+                the portal refuses the query as invalid.
             CaptchaError: if the CAPTCHA solver couldn't produce a valid
                 solution within ``max_captcha_attempts`` tries. Empty
                 results are now distinguishable from "we gave up": empty
                 means the portal returned zero rows.
         """
+        act = self._check_query(search_text, act)
         captcha_text = await self._authenticate(
-            search_text, max_captcha_attempts=max_captcha_attempts
+            search_text or act, max_captcha_attempts=max_captcha_attempts
         )
         if captcha_text is None:
             raise CaptchaError(f"Failed to solve CAPTCHA after {max_captcha_attempts} attempts")
@@ -216,22 +278,28 @@ class JudgmentSearchClient:
             court_type=court_type,
             page=page,
             page_size=page_size,
+            act=act,
+            section=section,
         )
         return parse_search_response(data, page=page, page_size=page_size)
 
     async def search_all(
         self,
-        search_text: str,
+        search_text: str = "",
         *,
         page_size: int = 25,
         search_opt: str = "PHRASE",
         court_type: str = "2",
+        act: str = "",
+        section: str = "",
         max_captcha_attempts: int = 5,
     ) -> AsyncIterator[SearchResult]:
         """Iterate through every page of results, yielding one SearchResult
-        per page. Re-authenticates if the session token expires mid-walk."""
+        per page. Re-authenticates if the session token expires mid-walk.
+        Takes the same ``act`` / ``section`` filters as :meth:`search`."""
+        act = self._check_query(search_text, act)
         captcha_text = await self._authenticate(
-            search_text, max_captcha_attempts=max_captcha_attempts
+            search_text or act, max_captcha_attempts=max_captcha_attempts
         )
         if captcha_text is None:
             raise CaptchaError(f"Failed to solve CAPTCHA after {max_captcha_attempts} attempts")
@@ -246,11 +314,13 @@ class JudgmentSearchClient:
                     court_type=court_type,
                     page=page,
                     page_size=page_size,
+                    act=act,
+                    section=section,
                 )
             except RuntimeError:
                 logger.info("Session likely expired at page %d, re-auth", page)
                 captcha_text = await self._authenticate(
-                    search_text, max_captcha_attempts=max_captcha_attempts
+                    search_text or act, max_captcha_attempts=max_captcha_attempts
                 )
                 if captcha_text is None:
                     raise CaptchaError(
@@ -263,6 +333,44 @@ class JudgmentSearchClient:
             if not result.has_next or not result.items:
                 break
             page += 1
+
+    @staticmethod
+    def _check_query(search_text: str, act: str) -> str:
+        """Validate a search's inputs before any CAPTCHA; return the act to send."""
+        act = normalize_act_text(act) if act else ""
+        if not search_text and not act:
+            raise ValueError("search needs search_text, act, or both")
+        return act
+
+    async def list_acts(self, *, max_captcha_attempts: int = 5) -> list[str]:
+        """The portal's act vocabulary — the names its act box suggests.
+
+        About 2,000 names, portal-wide rather than per court. Useful for
+        choosing an ``act=`` spelling the portal's own suggestions use; the
+        filter itself matches any text, so a name need not be on this list.
+        Needs a CAPTCHA-validated session.
+
+        Raises:
+            CaptchaError: If the CAPTCHA could not be solved.
+        """
+        if await self._authenticate("act", max_captcha_attempts=max_captcha_attempts) is None:
+            raise CaptchaError(f"Failed to solve CAPTCHA after {max_captcha_attempts} attempts")
+        resp = await self._http.post(
+            endpoints.GET_DATA_URL,
+            content=urlencode({"ajax_req": "true", "app_token": self._app_token}),
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        )
+        try:
+            data = json.loads(resp.text.lstrip())
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"get_data returned non-JSON: {resp.text[:200]!r}") from e
+        self._update_token_from_response(data)
+        names = (str(n).strip() for n in data.get("res_act1") or [])
+        # The list carries debris such as "[" — keep entries that read as names.
+        return [n for n in names if sum(c.isalpha() for c in n) >= 3]
 
     # -- PDF download ---------------------------------------------------------
 

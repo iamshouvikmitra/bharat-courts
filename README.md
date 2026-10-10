@@ -145,6 +145,39 @@ async def main():
 asyncio.run(main())
 ```
 
+### Find every case filed under an act
+
+```python
+import asyncio
+from bharat_courts import ActSearch
+
+
+async def main():
+    async with ActSearch() as s:
+        result = await s.cases(
+            act="NI Act",  # resolved against each court's own act list
+            section="138",
+            courts=["delhi", "allahabad"],  # or "all-hc"
+            status="Pending",
+            year=2026,
+        )
+        print(result.resolution)  # per court: which codes "NI Act" became ([] = not listed)
+        for hit in result.hits:
+            print(
+                hit.court.code, hit.case.case_number, hit.case.petitioner, "v", hit.case.respondent
+            )
+
+
+asyncio.run(main())
+```
+
+Act codes and names differ on every court ("INDIAN PENAL CODE" in Delhi, "PENAL CODE,
+1860" in Gujarat), so `ActSearch` looks each one up for you. `include_successor=True`
+also searches the 2024 replacement code (IPC 302 → BNS 103), and `with_judgments=True`
+attaches archived judgments to disposed cases. For judgments that merely *mention* an
+act, use `Judgments().find(act="Negotiable Instruments Act", section="138")`. See the
+[search-by-act guide](docs/guides/act-search.md).
+
 ### Check case status and download orders
 
 ```python
@@ -323,6 +356,7 @@ Note: `status`, `registration_date`, `judges`, and `next_hearing_date` are not r
 | Source | Client | Status |
 |--------|--------|--------|
 | **Federated (archive + live)** | **`Judgments`** | **Recommended entry point — one `find()` call routes to archive vs live by query shape** |
+| **Search by act (HC Services)** | **`ActSearch`** | **Cases registered under an act across High Courts, act names resolved per court, IPC→BNS crosswalk** |
 | [HC Services](https://hcservices.ecourts.gov.in) | `HCServicesClient` | Fully working |
 | [District Courts](https://services.ecourts.gov.in) | `DistrictCourtClient` | Case status, orders, cause lists across 700+ courts |
 | [Judgment Search](https://judgments.ecourts.gov.in) | `JudgmentSearchClient` | Search, pagination, bulk PDF download |
@@ -352,7 +386,7 @@ pip install 'bharat-courts[archive,ocr]'
 
 ---
 
-#### `find(*, text=None, court=None, year=None, judge=None, party=None, citation=None, cnr=None, source="auto", limit=50) -> list[Judgment]`
+#### `find(*, text=None, court=None, year=None, judge=None, party=None, citation=None, cnr=None, act=None, section=None, source="auto", limit=50) -> list[Judgment]`
 
 Run a search, routing transparently between the archive and the live portal.
 
@@ -365,6 +399,8 @@ Run a search, routing transparently between the archive and the live portal.
 | `party` | `str \| None` | Substring on petitioner/respondent (SCI) or title (HC). |
 | `citation` | `str \| None` | Citation substring (archive, SCI only). |
 | `cnr` | `str \| None` | Exact CNR match. Auto-routes via the 4-letter prefix when `source="auto"`. |
+| `act` | `str \| None` | Judgments whose text mentions this act (live judgments portal). `text` may be omitted. |
+| `section` | `str \| None` | Section to pair with `act`. |
 | `source` | `"auto" \| "archive" \| "live"` | Override the automatic routing. |
 | `limit` | `int` | Total results to return (default 50). |
 
@@ -375,6 +411,7 @@ Run a search, routing transparently between the archive and the live portal.
 | filter shape | backend |
 |---|---|
 | `cnr=` set | archive (prefix-routed; no scan) |
+| `act=` set | live (only the judgments portal filters by act; forcing `source="archive"` raises) |
 | `text=` set, no structured filters | live |
 | structured filters only (court/year/judge/party/citation) | archive |
 | `text=` + structured filters | archive — `text` folds into a title-substring match (party slot) |

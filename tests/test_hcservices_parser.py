@@ -11,13 +11,16 @@ from bharat_courts.hcservices.parser import (
     CaptchaError,
     ServerError,
     dedupe_by_cnr,
+    filter_by_year,
     is_captcha_rejection,
     parse_advocate_cause_list,
     parse_advocate_search,
     parse_case_status,
     parse_cause_list,
+    parse_code_name_list,
     parse_orders,
 )
+from bharat_courts.models import CaseInfo
 
 # ------------------------------------------------------------------
 # JSON response tests (real format from showRecords)
@@ -367,3 +370,63 @@ def test_captcha_rejections_are_recognised_without_a_full_parse(raw):
 )
 def test_successful_responses_are_not_read_as_captcha_rejections(raw):
     assert is_captcha_rejection(raw) is False
+
+
+# ------------------------------------------------------------------
+# Act search
+# ------------------------------------------------------------------
+
+_FIXTURES = __import__("pathlib").Path(__file__).parent / "fixtures"
+
+
+def test_parse_code_name_list_skips_var_dump_prefix():
+    """fillActType prepends a PHP var_dump whose own '#' splits like an entry."""
+    acts = parse_code_name_list((_FIXTURES / "hcservices_act_list.txt").read_text())
+
+    assert acts["18"] == "NEGOTIABLE INSTRUMENTS ACT, 1881"
+    assert acts["1"] == "INDIAN PENAL CODE"
+    assert not any("PDO" in name or "{" in name for name in acts.values())
+    assert "0" not in acts
+    assert "959" not in acts
+
+
+def test_parse_code_name_list_unescapes_names():
+    acts = parse_code_name_list((_FIXTURES / "hcservices_act_list.txt").read_text())
+    assert acts["165"] == "ARBITRATION & CONCILIATION ACT, 1996"
+
+
+def test_parse_code_name_list_plain_dropdown():
+    raw = "\ufeff0~Select Bench#1~Principal Bench at Delhi#2~Lucknow Bench#"
+    assert parse_code_name_list(raw) == {"1": "Principal Bench at Delhi", "2": "Lucknow Bench"}
+
+
+def test_parse_act_search_maps_decision_date():
+    rows = parse_case_status((_FIXTURES / "hcservices_act_search.json").read_text())
+
+    assert len(rows) == 5
+    assert rows[0].cnr_number == "DLHC010676322025"
+    assert rows[0].case_number == "3497/2025"
+    assert rows[0].decision_date == date(2026, 2, 24)
+
+
+def test_dedupe_by_cnr_accepts_case_info():
+    """Act searches repeat a case once per party, like cause lists do."""
+    rows = parse_case_status((_FIXTURES / "hcservices_act_search.json").read_text())
+    deduped = dedupe_by_cnr(rows)
+
+    assert len(deduped) == 4
+    assert deduped[0] is rows[0]
+
+
+@pytest.mark.parametrize(
+    ("year", "expected"),
+    [
+        (None, ["1/2024", "CA/2/2025", "3/2026", "bad"]),
+        (2025, ["CA/2/2025"]),
+        ((2024, 2025), ["1/2024", "CA/2/2025"]),
+    ],
+)
+def test_filter_by_year(year, expected):
+    numbers = ("1/2024", "CA/2/2025", "3/2026", "bad")
+    cases = [CaseInfo(case_number=n, case_type="") for n in numbers]
+    assert [c.case_number for c in filter_by_year(cases, year)] == expected

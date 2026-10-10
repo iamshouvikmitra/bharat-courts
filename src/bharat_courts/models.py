@@ -107,6 +107,9 @@ class CaseInfo(_Serializable):
     court_name: str = ""
     judges: list[str] = field(default_factory=list)
     next_hearing_date: date | None = None
+    #: Only where the search response carries it — HC act searches return it
+    #: on disposed rows. Other searches leave it empty rather than guess.
+    decision_date: date | None = None
 
 
 @dataclass

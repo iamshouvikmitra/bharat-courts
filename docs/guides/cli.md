@@ -153,7 +153,7 @@ do next.
 
 Commands for `hcservices.ecourts.gov.in`. Most take a **court code** as a
 positional argument (run `bharat-courts courts --type hc` to list them). The
-discovery commands (`benches`, `case-types`) need no CAPTCHA; the rest do, and
+discovery commands (`benches`, `case-types`, `acts`) need no CAPTCHA; the rest do, and
 are auto-retried.
 
 | Command | Purpose | Key options |
@@ -162,6 +162,8 @@ are auto-retried.
 | `case-types COURT` | List case-type codes for a bench | `--bench` (default `1`) |
 | `search COURT` | Case status by case number | `--case-type` ·`--case-number` · `--year` (all required) · `--bench` |
 | `search-by-party COURT` | Case status by party name | `--party` · `--year` (both required) · `--status pending\|disposed\|both` · `--bench` |
+| `acts COURT` | List act codes for a bench (court-local) | `--bench` · `--search` |
+| `search-by-act COURT` | Cases registered under an act | `--act NAME` or `--act-code N` · `--section` (repeatable) · `--status` · `--year` · `--bench` · `--include-successor` |
 | `orders COURT` | Orders for a case | `--case-type` · `--case-number` · `--year` (required) · `--bench` · `--download DIR` |
 | `cause-list COURT` | Cause-list PDFs | `--date DD-MM-YYYY` · `--criminal` · `--bench` · `--download DIR` |
 
@@ -204,6 +206,8 @@ feed those codes into the search/orders/cause-list commands.
 | `courts` | Courts for cause-list lookup | `--state` · `--dist` · `--complex` (`--est` optional) |
 | `search` | Case status by case number | `--state` · `--dist` · `--complex` · `--case-type` · `--case-number` · `--year` (`--est` optional) |
 | `search-by-party` | Case status by party | `--state` · `--dist` · `--complex` · `--party` · `--year` (`--est` optional, `--status`) |
+| `acts` | Act codes for a court | `--state` · `--dist` · `--complex` (`--est`, `--search` optional) |
+| `search-by-act` | Cases registered under an act | `--state` · `--dist` · `--complex` · `--act` or `--act-code` (`--est` or `--all-establishments`, `--section`, `--status`, `--year`) |
 | `orders` | Orders for a case | as `search`, plus `--download DIR` |
 | `cause-list` | Cause-list entries | `--state` · `--dist` · `--complex` · `--court-no` (`--est`, `--court-name`, `--date`, `--criminal`) |
 
@@ -262,7 +266,7 @@ Full-text search against `judgments.ecourts.gov.in`. CAPTCHA-gated.
 
 | Command | Purpose | Key options |
 |---------|---------|-------------|
-| `search` | One page of results | `--text` (required) · `--page` · `--page-size` · `--search-opt PHRASE\|ANY\|ALL` · `--court-type` · `--download DIR` |
+| `search` | One page of results | `--text` and/or `--act` (one is required) · `--section` · `--page` · `--page-size` · `--search-opt PHRASE\|ANY\|ALL` · `--court-type` · `--download DIR` |
 | `search-all` | Walk every page | `--text` (required) · `--page-size` · `--max-pages` (0 = all) · `--search-opt` · `--court-type` · `--download DIR` |
 
 `--court-type` is `2` for High Courts (default) or `3` for the Supreme Court
@@ -280,6 +284,29 @@ bharat-courts judgments search-all \
 The `search` JSON output wraps the items in pagination metadata
 (`total_count`, `page`, `page_size`, `has_next`, `total_pages`, `items`);
 `search-all` returns `{"total_items": N, "items": [...]}`.
+
+## `acts` — search by act
+
+Resolve act names per court, search cases registered under an act across High
+Courts, and map repealed sections to the 2024 codes. The
+[Search by act guide](act-search.md) explains what each answers.
+
+| Command | Purpose | Key options |
+|---------|---------|-------------|
+| `resolve QUERY` | Which entries of a court's act list a name matches (no CAPTCHA) | `--court` (required) · `--bench` |
+| `search` | Cases registered under an act, across courts | `--act` · `--courts delhi,bombay\|all-hc` · `--section` (repeatable) · `--status` · `--year` · `--include-successor` · `--all-benches` · `--with-judgments` · `--concurrency` |
+| `successor ACT SECTION` | Where an IPC / CrPC / Evidence Act section went on 1 July 2024 | — |
+
+```bash
+bharat-courts acts resolve "NI Act" --court delhi
+bharat-courts acts search --act "NI Act" --section 138 --courts delhi,allahabad --year 2026
+bharat-courts acts successor ipc 302      # IPC 302 → BNS 103(1)
+```
+
+Per-portal equivalents: `hcservices acts` / `hcservices search-by-act` (by `--act` name
+or `--act-code`), and `districtcourts acts` / `districtcourts search-by-act`
+(`--all-establishments` to cover a whole complex). `find --act` and
+`judgments search --act` find judgments that *mention* an act.
 
 ## `sci` — Supreme Court feed
 

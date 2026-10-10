@@ -18,6 +18,8 @@ Tests:
   6. HC Services: case status by case number (CAPTCHA + retry)
   7. JSON serialization of all results
   8. OCR CAPTCHA solver stress test
+  9. HC Services: case status by act (CAPTCHA + retry)
+ 10. Judgment portal: search by act (judgments.ecourts.gov.in)
 """
 
 import asyncio
@@ -251,6 +253,60 @@ async def test_case_status_by_party():
     results.append(t)
 
 
+async def test_case_status_by_act():
+    """Test 9: NI Act s.138 pending cases in Delhi HC.
+
+    The act code is looked up by name rather than hardcoded — codes are local
+    to each court and are exactly the kind of value that drifts.
+    """
+    t = TestResult("Case Status by Act (Delhi HC, NI Act s.138, Pending)")
+    try:
+        from bharat_courts.captcha.ocr import OCRCaptchaSolver
+        from bharat_courts.courts import get_court
+        from bharat_courts.hcservices.client import HCServicesClient
+
+        async with HCServicesClient(captcha_solver=OCRCaptchaSolver()) as client:
+            delhi = get_court("delhi")
+            acts = await client.list_acts(delhi, search="negotiable")
+            codes = [c for c, name in acts.items() if "NEGOTIABLE INSTRUMENTS" in name.upper()]
+            t.details["act_codes"] = codes
+            if not codes:
+                t.error = f"NI Act not in Delhi act list: {acts}"
+                results.append(t)
+                return
+
+            cases = await client.case_status_by_act(delhi, act_code=codes[0], section="138")
+            t.details["cases_found"] = len(cases)
+            if cases:
+                save_json("case_status_act", [c.to_dict(exclude_none=True) for c in cases[:10]])
+            # Not "DLHC" for every row: a few petitions carry the trial court's
+            # CNR (seen live: DLND…, DLCT… on CRL.M.C. matters), so only the
+            # state prefix is reliable.
+            t.passed = len(cases) > 0 and all(c.cnr_number.startswith("DL") for c in cases)
+    except Exception as e:
+        t.error = f"{type(e).__name__}: {e}"
+        traceback.print_exc()
+    results.append(t)
+
+
+async def test_judgments_by_act():
+    """Test 10: Judgments mentioning NI Act s.138, with no keywords."""
+    t = TestResult("Judgment Search by Act (NI Act s.138, no search text)")
+    try:
+        from bharat_courts.captcha.ocr import OCRCaptchaSolver
+        from bharat_courts.judgments.client import JudgmentSearchClient
+
+        async with JudgmentSearchClient(captcha_solver=OCRCaptchaSolver()) as client:
+            sr = await client.search(act="Negotiable Instruments Act, 1881", section="138")
+            t.details["total_count"] = sr.total_count
+            t.details["first_title"] = sr.items[0].title if sr.items else None
+            t.passed = sr.total_count > 0 and len(sr.items) > 0
+    except Exception as e:
+        t.error = f"{type(e).__name__}: {e}"
+        traceback.print_exc()
+    results.append(t)
+
+
 async def test_case_status_by_number():
     """Test 6: Case status by case number (auto-retry)."""
     t = TestResult("Case Status by Number (Delhi HC, W.P.(C)/1/2024)")
@@ -423,14 +479,16 @@ async def run_all():
     print()
 
     test_funcs = [
-        ("1/8", "Court Registry", test_court_registry),
-        ("2/8", "Bench Listing", test_bench_listing),
-        ("3/8", "Case Type Listing", test_case_type_listing),
-        ("4/8", "Cause List", test_cause_list),
-        ("5/8", "Case Status by Party", test_case_status_by_party),
-        ("6/8", "Case Status by Number", test_case_status_by_number),
-        ("7/8", "JSON Serialization", test_json_serialization),
-        ("8/8", "OCR CAPTCHA Solver", test_ocr_captcha_solver),
+        ("1/10", "Court Registry", test_court_registry),
+        ("2/10", "Bench Listing", test_bench_listing),
+        ("3/10", "Case Type Listing", test_case_type_listing),
+        ("4/10", "Cause List", test_cause_list),
+        ("5/10", "Case Status by Party", test_case_status_by_party),
+        ("6/10", "Case Status by Number", test_case_status_by_number),
+        ("7/10", "JSON Serialization", test_json_serialization),
+        ("8/10", "OCR CAPTCHA Solver", test_ocr_captcha_solver),
+        ("9/10", "Case Status by Act", test_case_status_by_act),
+        ("10/10", "Judgments by Act", test_judgments_by_act),
     ]
 
     for label, name, func in test_funcs:

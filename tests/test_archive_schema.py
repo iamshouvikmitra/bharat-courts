@@ -290,3 +290,30 @@ def test_hc_query_supreme_court_input_skips_state_filter(query):
     )
     assert "SPLIT_PART" not in sql
     assert params == []
+
+
+@pytest.mark.parametrize("builder", ["_build_sci_query", "_build_hc_query"])
+def test_query_single_cnr_is_an_equality(query, builder):
+    kwargs = dict(year=None, judge=None, party=None, cnr="DLHC010000012024", limit=10)
+    if builder == "_build_sci_query":
+        kwargs["citation"] = None
+    else:
+        kwargs["court"] = None
+    sql, params = getattr(query, builder)(**kwargs)
+    assert "cnr = ?" in sql
+    assert params == ["DLHC010000012024"]
+
+
+@pytest.mark.parametrize("builder", ["_build_sci_query", "_build_hc_query"])
+def test_query_cnr_list_is_one_parameterised_in(query, builder):
+    """Batch joins pass many CNRs; each must stay a bound parameter."""
+    cnrs = ["GJHC240000012024", "GJHC240000022024", "x' OR 1=1 --"]
+    kwargs = dict(year=2024, judge=None, party=None, cnr=cnrs, limit=30)
+    if builder == "_build_sci_query":
+        kwargs["citation"] = None
+    else:
+        kwargs["court"] = None
+    sql, params = getattr(query, builder)(**kwargs)
+    assert "cnr IN (?, ?, ?)" in sql
+    assert "OR 1=1" not in sql
+    assert params[-3:] == cnrs

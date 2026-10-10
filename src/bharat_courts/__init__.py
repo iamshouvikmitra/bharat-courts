@@ -1,6 +1,8 @@
 """bharat-courts — Async Python client for Indian court data."""
 
 from bharat_courts._version import __version__
+from bharat_courts.acts import Act, ActMatch, lookup_acts, successor_sections
+from bharat_courts.actsearch import ActCaseHit, ActSearch, ActSearchResult
 from bharat_courts.calcuttahc.client import CalcuttaHCClient
 from bharat_courts.captcha import CaptchaSolver, ManualCaptchaSolver, default_solver
 from bharat_courts.casedetail import parse_case_detail
@@ -40,6 +42,13 @@ from bharat_courts.models import (
 from bharat_courts.sci.client import SCIClient
 
 __all__ = [
+    "Act",
+    "ActCaseHit",
+    "ActMatch",
+    "ActSearch",
+    "ActSearchResult",
+    "lookup_acts",
+    "successor_sections",
     "parse_case_detail",
     "PartyEntry",
     "HearingEntry",

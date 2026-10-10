@@ -6,8 +6,8 @@ and depend on third-party portals that can change shape underneath us.
 
 | File | Hits | Runtime | Purpose |
 |---|---|---|---|
-| `hcservices.py` | `hcservices.ecourts.gov.in` | ~60s (CAPTCHA-dependent) | Bench listing, case types, cause list, case status, OCR solver stress |
-| `districtcourts.py` | `services.ecourts.gov.in` | ~30s | Bihar drill-down + party-name search |
+| `hcservices.py` | `hcservices.ecourts.gov.in` + `judgments.ecourts.gov.in` | ~90s (CAPTCHA-dependent) | Bench listing, case types, cause list, case status (incl. by act), OCR solver stress, judgment search by act |
+| `districtcourts.py` | `services.ecourts.gov.in` | ~45s | Bihar drill-down + party-name search; Delhi act search |
 | `archive.py` | S3: `indian-{supreme,high}-court-judgments` | ~30-45s cold (~5s warm) | Archive metadata, parquet cache, CNR routing, streaming, PDF fetch, federated facade |
 | `calcuttahc_wpa_12886.py` | `hcservices.ecourts.gov.in` + `judgments.ecourts.gov.in` | ~30s | Regression for a known-good Calcutta HC case |
 

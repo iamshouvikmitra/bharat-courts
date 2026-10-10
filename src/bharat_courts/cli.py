@@ -11,6 +11,7 @@ Command surface (top-level groups match SDK module names exactly):
     bharat-courts calcuttahc ...        # calcuttahighcourt.gov.in
     bharat-courts judgments ...         # judgments.ecourts.gov.in
     bharat-courts sci ...               # www.sci.gov.in
+    bharat-courts acts ...              # act-name resolution + search by act
 
 Global flags (work on every subcommand): --json, --captcha-attempts N, -v/--verbose.
 
@@ -123,6 +124,42 @@ def _warn(msg: str) -> None:
     click.echo(f"WARN: {msg}", err=True)
 
 
+def _parse_year(year: str | None) -> int | tuple[int, int] | None:
+    """``"2020"`` → 2020; ``"2018-2024"`` → (2018, 2024); None → None."""
+    if year is None:
+        return None
+    try:
+        if "-" in year:
+            lo, hi = year.split("-", 1)
+            return (int(lo), int(hi))
+        return int(year)
+    except ValueError as e:
+        raise click.BadParameter(f"expected YYYY or YYYY-YYYY, got {year!r}") from e
+
+
+_STATUS_CHOICE = click.Choice(["pending", "disposed", "both"])
+
+
+def _status_filter(status: str) -> str:
+    return {"pending": "Pending", "disposed": "Disposed", "both": "Both"}[status]
+
+
+def _print_case(case: Any, *, extra: str = "") -> None:
+    """One case search result, human-readable."""
+    # District case numbers already carry the type ("CA/142/2026").
+    label = case.case_number
+    if case.case_type and not label.startswith(case.case_type):
+        label = f"{case.case_type} {label}"
+    click.echo(f"\n{label}" + (f"  [{extra}]" if extra else ""))
+    if case.petitioner or case.respondent:
+        click.echo(f"  {case.petitioner} vs {case.respondent}")
+    meta = [p for p in (case.cnr_number, case.status) if p]
+    if case.decision_date:
+        meta.append(f"decided {case.decision_date}")
+    if meta:
+        click.echo("  " + " · ".join(meta))
+
+
 def _resolve_court_or_die(court_code: str) -> Any:
     court = get_court(court_code)
     if not court:
@@ -231,6 +268,8 @@ def install_skills():
 @click.option("--party", default=None, help="Substring on petitioner/respondent/title.")
 @click.option("--citation", default=None, help="SCI citation substring.")
 @click.option("--cnr", default=None, help="CNR — auto-routes to archive via prefix.")
+@click.option("--act", default=None, help="Judgments mentioning this act (routes to live).")
+@click.option("--section", default=None, help="Section to pair with --act.")
 @click.option(
     "--source",
     type=click.Choice(["auto", "archive", "live"]),
@@ -249,6 +288,8 @@ def find(
     party: str | None,
     citation: str | None,
     cnr: str | None,
+    act: str | None,
+    section: str | None,
     source: str,
     limit: int,
 ):
@@ -257,21 +298,14 @@ def find(
     Routing (in auto mode):
     \b
       cnr=                      → archive
+      act=                      → live (judgments mentioning the act)
       text= only                → live
       structured filters only   → archive
       text + structured         → archive (text falls back to title-match)
     """
     from bharat_courts.facade import Judgments
 
-    # Parse year argument — reuse the archive's parser.
-    year_arg: int | tuple[int, int] | None
-    if year is None:
-        year_arg = None
-    elif "-" in year:
-        lo, hi = year.split("-", 1)
-        year_arg = (int(lo), int(hi))
-    else:
-        year_arg = int(year)
+    year_arg = _parse_year(year)
 
     async def _go():
         async with Judgments() as facade:
@@ -283,11 +317,16 @@ def find(
                 party=party,
                 citation=citation,
                 cnr=cnr,
+                act=act,
+                section=section,
                 source=source,
                 limit=limit,
             )
 
-    results = _run(_go())
+    try:
+        results = _run(_go())
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
 
     if _is_json(ctx):
         _emit_json([j.to_dict(exclude_none=True) for j in results])
@@ -473,6 +512,106 @@ def hcservices_search_by_party(
             click.echo(f"  {case.petitioner} vs {case.respondent}")
         if case.status:
             click.echo(f"  Status: {case.status}")
+
+
+@hcservices.command("acts")
+@click.argument("court_code")
+@click.option("--bench", "bench_code", default="1", show_default=True)
+@click.option("--search", default="", help="Substring to narrow the list (server-side).")
+@click.pass_context
+def hcservices_acts(ctx: click.Context, court_code: str, bench_code: str, search: str):
+    """List the acts a High Court bench files cases under (codes are court-local)."""
+    court = _resolve_court_or_die(court_code)
+
+    async def _go():
+        from bharat_courts.hcservices.client import HCServicesClient
+
+        async with HCServicesClient() as client:
+            return await client.list_acts(court, bench_code=bench_code, search=search)
+
+    acts = _run(_go())
+    if _is_json(ctx):
+        _emit_json(acts)
+        return
+    if not acts:
+        click.echo("No acts found.")
+        return
+    for code, name in acts.items():
+        click.echo(f"  {code:>6}  {name}")
+
+
+@hcservices.command("search-by-act")
+@click.argument("court_code")
+@click.option("--act", default=None, help="Act name, resolved against the court's list.")
+@click.option("--act-code", default=None, help="Act code from `hcservices acts` (skips resolving).")
+@click.option("--section", "sections", multiple=True, help="Section (exact). Repeatable.")
+@click.option("--status", type=_STATUS_CHOICE, default="pending", show_default=True)
+@click.option("--year", default=None, help="Registration year (2024) or range (2020-2024).")
+@click.option("--bench", "bench_code", default="1", show_default=True)
+@click.option("--include-successor", is_flag=True, help="Also search BNS/BNSS/BSA equivalents.")
+@click.pass_context
+def hcservices_search_by_act(
+    ctx: click.Context,
+    court_code: str,
+    act: str | None,
+    act_code: str | None,
+    sections: tuple[str, ...],
+    status: str,
+    year: str | None,
+    bench_code: str,
+    include_successor: bool,
+):
+    """Search a High Court for cases registered under an act."""
+    if bool(act) == bool(act_code):
+        raise click.UsageError("pass exactly one of --act or --act-code")
+    if act_code and include_successor:
+        raise click.UsageError("--include-successor needs --act (a name), not --act-code")
+    court = _resolve_court_or_die(court_code)
+    year_arg = _parse_year(year)
+
+    if act:
+        _run_act_search(
+            ctx,
+            act=act,
+            courts=[court.code],
+            sections=list(sections),
+            status=_status_filter(status),
+            year=year_arg,
+            bench_code=bench_code,
+            include_successor=include_successor,
+        )
+        return
+
+    async def _go():
+        from bharat_courts.hcservices.client import HCServicesClient
+        from bharat_courts.hcservices.parser import dedupe_by_cnr
+
+        async with HCServicesClient() as client:
+            rows = []
+            for section in sections or ("",):
+                rows += await client.case_status_by_act(
+                    court,
+                    act_code=act_code,
+                    section=section,
+                    status_filter=_status_filter(status),
+                    bench_code=bench_code,
+                    year=year_arg,
+                )
+            return dedupe_by_cnr(rows)
+
+    try:
+        results = _run(_go())
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
+    if _is_json(ctx):
+        _emit_json([c.to_dict(exclude_none=True) for c in results])
+        return
+    if not results:
+        click.echo("No cases found.")
+        return
+    click.echo(f"Found {len(results)} case(s)")
+    for case in results:
+        _print_case(case)
 
 
 @hcservices.command("orders")
@@ -881,6 +1020,139 @@ def dc_search_by_party(
             click.echo(f"  Status: {case.status}")
 
 
+@districtcourts.command("acts")
+@click.option("--state", "state_code", required=True)
+@click.option("--dist", "dist_code", required=True)
+@click.option("--complex", "complex_code", required=True)
+@click.option("--est", "est_code", default="")
+@click.option("--search", default="", help="Substring to narrow the list (server-side).")
+@click.pass_context
+def dc_acts(
+    ctx: click.Context,
+    state_code: str,
+    dist_code: str,
+    complex_code: str,
+    est_code: str,
+    search: str,
+):
+    """List the acts a court complex/establishment files cases under."""
+
+    async def _go():
+        from bharat_courts.districtcourts.client import DistrictCourtClient
+
+        async with DistrictCourtClient() as client:
+            return await client.list_acts(
+                state_code, dist_code, complex_code, est_code, search=search
+            )
+
+    acts = _run(_go())
+    if _is_json(ctx):
+        _emit_json(acts)
+        return
+    if not acts:
+        click.echo("No acts found.")
+        return
+    for code, name in acts.items():
+        click.echo(f"  {code:>6}  {name}")
+
+
+@districtcourts.command("search-by-act")
+@click.option("--state", "state_code", required=True)
+@click.option("--dist", "dist_code", required=True)
+@click.option("--complex", "complex_code", required=True)
+@click.option("--est", "est_code", default="", help="Establishment (when the complex needs one).")
+@click.option(
+    "--all-establishments",
+    is_flag=True,
+    help="Search every establishment of the complex (one search each).",
+)
+@click.option("--act", default=None, help="Act name, resolved against each court's list.")
+@click.option("--act-code", default=None, help="Act code from `districtcourts acts`.")
+@click.option("--section", default="", help="Section (exact; max 15 chars).")
+@click.option("--status", type=_STATUS_CHOICE, default="pending", show_default=True)
+@click.option("--year", default=None, help="Registration year (2024) or range (2020-2024).")
+@click.pass_context
+def dc_search_by_act(
+    ctx: click.Context,
+    state_code: str,
+    dist_code: str,
+    complex_code: str,
+    est_code: str,
+    all_establishments: bool,
+    act: str | None,
+    act_code: str | None,
+    section: str,
+    status: str,
+    year: str | None,
+):
+    """Search district courts for cases registered under an act.
+
+    An act search covers one establishment: within a complex, cheque cases
+    sit with the magistrates, not the sessions court. Use
+    --all-establishments to search them all.
+    """
+    if bool(act) == bool(act_code):
+        raise click.UsageError("pass exactly one of --act or --act-code")
+    if all_establishments and act_code:
+        raise click.UsageError("--all-establishments needs --act: codes differ per establishment")
+    year_arg = _parse_year(year)
+
+    async def _go():
+        from bharat_courts.acts import resolve
+        from bharat_courts.districtcourts.client import DistrictCourtClient
+
+        async with DistrictCourtClient() as client:
+            ests = [est_code]
+            if all_establishments:
+                ests = list(await client.list_establishments(state_code, dist_code, complex_code))
+            found = []
+            for est in ests:
+                codes = [act_code] if act_code else []
+                if act:
+                    acts = await client.list_acts(state_code, dist_code, complex_code, est)
+                    codes = [m.code for m in resolve(act, acts)]
+                    if not codes:
+                        _warn(f"establishment {est or '-'}: {act!r} not on its act list")
+                for code in codes:
+                    try:
+                        rows = await client.case_status_by_act(
+                            state_code=state_code,
+                            dist_code=dist_code,
+                            court_complex_code=complex_code,
+                            est_code=est,
+                            act_code=code,
+                            section=section,
+                            status_filter=_status_filter(status),
+                            year=year_arg,
+                        )
+                    except ValueError:
+                        raise  # bad input: abort the whole command, not just this est
+                    except Exception as e:
+                        _warn(f"establishment {est or '-'}, act {code}: {type(e).__name__}: {e}")
+                        continue
+                    found += [(est, code, r) for r in rows]
+            return found
+
+    try:
+        found = _run(_go())
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
+    if _is_json(ctx):
+        _emit_json(
+            [
+                {"est_code": est, "act_code": code, **case.to_dict(exclude_none=True)}
+                for est, code, case in found
+            ]
+        )
+        return
+    if not found:
+        click.echo("No cases found.")
+        return
+    click.echo(f"Found {len(found)} case(s)")
+    for est, code, case in found:
+        _print_case(case, extra=f"est {est or '-'}, act {code}")
+
+
 @districtcourts.command("orders")
 @click.option("--state", "state_code", required=True)
 @click.option("--dist", "dist_code", required=True)
@@ -1180,7 +1452,9 @@ async def _download_judgment_pdfs(client, items, out_dir: Path, court_type: str)
 
 
 @judgments.command("search")
-@click.option("--text", "search_text", required=True, help="Search keywords or phrase.")
+@click.option("--text", "search_text", default="", help="Search keywords or phrase.")
+@click.option("--act", default="", help="Judgments mentioning this act (text match).")
+@click.option("--section", default="", help="Section to pair with --act.")
 @click.option("--page", default=1, type=int)
 @click.option("--page-size", default=10, type=int)
 @click.option("--search-opt", type=click.Choice(["PHRASE", "ANY", "ALL"]), default="PHRASE")
@@ -1190,13 +1464,19 @@ async def _download_judgment_pdfs(client, items, out_dir: Path, court_type: str)
 def judgments_search(
     ctx: click.Context,
     search_text: str,
+    act: str,
+    section: str,
     page: int,
     page_size: int,
     search_opt: str,
     court_type: str,
     download_dir: str | None,
 ):
-    """Search judgments on the judgment portal."""
+    """Search judgments on the judgment portal, by keywords and/or act."""
+    if not search_text and not act:
+        raise click.UsageError("pass --text, --act, or both")
+    if section and not act:
+        raise click.UsageError("--section needs --act")
     attempts = _captcha_attempts(ctx)
     is_json_out = _is_json(ctx)
 
@@ -1210,6 +1490,8 @@ def judgments_search(
                 page_size=page_size,
                 search_opt=search_opt,
                 court_type=court_type,
+                act=act,
+                section=section,
                 max_captcha_attempts=attempts,
             )
             local_paths: dict[int, str] = {}
@@ -1239,7 +1521,10 @@ def judgments_search(
                     )
             return sr, local_paths
 
-    sr, local_paths = _run(_go())
+    try:
+        sr, local_paths = _run(_go())
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
 
     if is_json_out:
         items_out = []
@@ -1733,6 +2018,173 @@ def archive_count(ctx: click.Context, court_code: str | None, year: int | None):
         return
     for source, n in counts.items():
         click.echo(f"  {source}: {n:,}")
+
+
+# ---------------------------------------------------------------------------
+# acts group
+# ---------------------------------------------------------------------------
+
+
+def _run_act_search(
+    ctx: click.Context,
+    *,
+    act: str,
+    courts: list[str],
+    sections: list[str],
+    status: str,
+    year: int | tuple[int, int] | None,
+    bench_code: str = "1",
+    all_benches: bool = False,
+    include_successor: bool = False,
+    with_judgments: bool = False,
+    concurrency: int = 2,
+) -> None:
+    """Run an ActSearch and print it — shared by `acts search` and
+    `hcservices search-by-act --act`."""
+    from bharat_courts.actsearch import ActSearch
+
+    async def _go():
+        async with ActSearch() as s:
+            return await s.cases(
+                act=act,
+                courts=courts,
+                section=sections or None,
+                status=status,
+                year=year,
+                bench_code=bench_code,
+                all_benches=all_benches,
+                include_successor=include_successor,
+                with_judgments=with_judgments,
+                concurrency=concurrency,
+            )
+
+    try:
+        result = _run(_go())
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
+
+    if _is_json(ctx):
+        _emit_json(result.to_dict(exclude_none=True))
+        return
+
+    for court_code, matches in result.resolution.items():
+        if matches:
+            names = "; ".join(f"{m.name} [{m.code}]" for m in matches)
+            click.echo(f"{court_code}: {act!r} → {names}")
+        else:
+            _warn(f"{court_code}: {act!r} is not on this court's act list")
+    for court_code, error in result.errors.items():
+        _warn(f"{court_code}: {error}")
+    if not result.hits:
+        click.echo("No cases found.")
+        return
+    click.echo(f"Found {len(result.hits)} case(s)")
+    for hit in result.hits:
+        label = f"{hit.court.code}: {hit.act_name}" + (f" s.{hit.section}" if hit.section else "")
+        _print_case(hit.case, extra=label)
+        if hit.judgment is not None:
+            click.echo(f"  Judgment in archive: {hit.judgment.pdf_path or hit.judgment.cnr}")
+
+
+@main.group()
+def acts():
+    """Act names: resolve them per court, search by act, map IPC→BNS."""
+
+
+@acts.command("resolve")
+@click.argument("query")
+@click.option("--court", "court_code", required=True, help="High Court code, e.g. 'delhi'.")
+@click.option("--bench", "bench_code", default="1", show_default=True)
+@click.pass_context
+def acts_resolve(ctx: click.Context, query: str, court_code: str, bench_code: str):
+    """Show which entries of a court's act list QUERY resolves to."""
+    court = _resolve_court_or_die(court_code)
+
+    async def _go():
+        from bharat_courts.actsearch import ActSearch
+
+        async with ActSearch() as s:
+            return await s.resolve(query, court, bench_code=bench_code)
+
+    try:
+        matches = _run(_go())
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
+    if _is_json(ctx):
+        _emit_json([m.to_dict(exclude_none=True) for m in matches])
+        return
+    if not matches:
+        click.echo(f"{query!r} is not on {court.name}'s act list.")
+        return
+    for m in matches:
+        click.echo(f"  {m.code:>6}  {m.name}  ({m.tier}, {m.score:g})")
+
+
+@acts.command("search")
+@click.option("--act", required=True, help="Act name, e.g. 'NI Act' or 'IPC'.")
+@click.option(
+    "--courts",
+    required=True,
+    help="Comma-separated High Court codes (delhi,bombay) or 'all-hc'.",
+)
+@click.option("--section", "sections", multiple=True, help="Section (exact). Repeatable.")
+@click.option("--status", type=_STATUS_CHOICE, default="pending", show_default=True)
+@click.option("--year", default=None, help="Registration year (2024) or range (2020-2024).")
+@click.option("--include-successor", is_flag=True, help="Also search BNS/BNSS/BSA equivalents.")
+@click.option("--all-benches", is_flag=True, help="Search every bench, not just the principal.")
+@click.option("--with-judgments", is_flag=True, help="Attach archived judgments (disposed).")
+@click.option("--concurrency", default=2, show_default=True, type=int)
+@click.pass_context
+def acts_search(
+    ctx: click.Context,
+    act: str,
+    courts: str,
+    sections: tuple[str, ...],
+    status: str,
+    year: str | None,
+    include_successor: bool,
+    all_benches: bool,
+    with_judgments: bool,
+    concurrency: int,
+):
+    """Search High Courts for cases registered under an act.
+
+    Each court × act code × section × status costs one CAPTCHA solve.
+    """
+    _run_act_search(
+        ctx,
+        act=act,
+        courts=[c.strip() for c in courts.split(",") if c.strip()],
+        sections=list(sections),
+        status=_status_filter(status),
+        year=_parse_year(year),
+        all_benches=all_benches,
+        include_successor=include_successor,
+        with_judgments=with_judgments,
+        concurrency=concurrency,
+    )
+
+
+@acts.command("successor")
+@click.argument("act")
+@click.argument("section")
+@click.pass_context
+def acts_successor(ctx: click.Context, act: str, section: str):
+    """Where a section of IPC, CrPC or the Evidence Act went on 1 July 2024."""
+    from bharat_courts.acts import successor_sections
+
+    mappings = successor_sections(act, section)
+    if _is_json(ctx):
+        _emit_json([m.to_dict() for m in mappings])
+        return
+    if not mappings:
+        click.echo(f"No successor found for {act} s.{section}.")
+        return
+    for m in mappings:
+        click.echo(
+            f"{m.old_act.upper()} {m.old_section} → {m.new_act.upper()} {m.new_section}"
+            f"  (search section: {m.new_section_base}; source p.{m.source_page})"
+        )
 
 
 if __name__ == "__main__":

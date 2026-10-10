@@ -15,6 +15,7 @@ Tests:
   3. List court complexes for Patna (no CAPTCHA)
   4. List case types (no CAPTCHA)
   5. Case status by party name (CAPTCHA + retry)
+  6. Case status by act — Delhi / Karkardooma, CMM establishment (CAPTCHA)
 """
 
 import asyncio
@@ -250,6 +251,47 @@ async def test_case_status_by_party():
     results.append(t)
 
 
+async def test_case_status_by_act():
+    """Test 6: NI Act s.138 pending at Karkardooma's CMM establishment.
+
+    Delhi rather than Bihar because this is where the act search was first
+    verified live. The establishment is found by name: an act search covers
+    one establishment, and cheque cases sit with the magistrates.
+    """
+    t = TestResult("Case Status by Act (Delhi/Karkardooma CMM, NI Act s.138)")
+    try:
+        from bharat_courts.districtcourts.client import DistrictCourtClient
+        from bharat_courts.districtcourts.parser import parse_complex_value
+
+        async with DistrictCourtClient(captcha_solver=solver) as client:
+            complexes = await client.list_complexes("26", "1")
+            complex_val = next(v for v, n in complexes.items() if "karkardooma" in n.lower())
+            complex_code, _, _ = parse_complex_value(complex_val)
+            ests = await client.list_establishments("26", "1", complex_code)
+            est_code = next(c for c, n in ests.items() if "metropolitan magistrate" in n.lower())
+
+            acts = await client.list_acts("26", "1", complex_code, est_code, search="negotiable")
+            t.details["acts"] = acts
+            act_code = next(c for c, n in acts.items() if "negotiable" in n.lower())
+
+            cases = await client.case_status_by_act(
+                state_code="26",
+                dist_code="1",
+                court_complex_code=complex_code,
+                est_code=est_code,
+                act_code=act_code,
+                section="138",
+            )
+            t.details["cases_found"] = len(cases)
+            if cases:
+                save_json("case_status_act", [c.to_dict(exclude_none=True) for c in cases[:10]])
+            t.passed = len(cases) > 0
+    except Exception as e:
+        t.error = f"{type(e).__name__}: {e}"
+        traceback.print_exc()
+    results.append(t)
+
+
 # --- Main ---
 
 
@@ -262,11 +304,12 @@ async def run_all():
     print()
 
     test_funcs = [
-        ("1/5", "List States", test_list_states),
-        ("2/5", "List Districts", test_list_districts),
-        ("3/5", "List Complexes", test_list_complexes),
-        ("4/5", "List Case Types", test_list_case_types),
-        ("5/5", "Case Status by Party", test_case_status_by_party),
+        ("1/6", "List States", test_list_states),
+        ("2/6", "List Districts", test_list_districts),
+        ("3/6", "List Complexes", test_list_complexes),
+        ("4/6", "List Case Types", test_list_case_types),
+        ("5/6", "Case Status by Party", test_case_status_by_party),
+        ("6/6", "Case Status by Act", test_case_status_by_act),
     ]
 
     for label, name, func in test_funcs:
