@@ -33,6 +33,13 @@ def render(summary: dict, *, title: bool) -> str:
         f"{verdict} · v{summary.get('version', '?')} · seed `{summary.get('seed', '?')}` · "
         f"egress: `{summary.get('proxy') or 'direct'}` · {summary.get('elapsed', 0)}s"
     )
+    if summary.get("complete") is False:
+        ran = len(summary.get("checks", []))
+        out.append("")
+        out.append(
+            f"⚠️ **Incomplete:** the script was killed after {ran}/{summary['total']} checks "
+            f"(hit the step's time cap — the unfinished check counts as a failure)."
+        )
     out.append("")
     out.append("| | Check | Covers | Time | Notes |")
     out.append("|---|---|---|---|---|")

@@ -71,7 +71,7 @@ jobs:
           - backend: districtcourts
             script: tests/integration/districtcourts.py
             hits: services.ecourts.gov.in (CAPTCHA-gated, rotating states)
-            run_timeout: 10
+            run_timeout: 13
             india_egress: true
           - backend: judgments
             script: tests/integration/judgments.py
@@ -175,10 +175,14 @@ jobs:
           HTTPS_PROXY: ${{ steps.egress.outputs.proxy }}
           HTTP_PROXY: ${{ steps.egress.outputs.proxy }}
           NO_PROXY: amazonaws.com,github.com,githubusercontent.com,pypi.org,huggingface.co,localhost,127.0.0.1
+          # A free proxy adds 3-6s per request and District Courts party
+          # searches already take 30-60s on the portal; 60s then times out.
+          BHARAT_COURTS_TIMEOUT: "120"
+          PYTHONUNBUFFERED: "1" # keep PASS/FAIL lines in the log if the cap kills the script
         run: |
           set +e
           mkdir -p e2e-logs
-          python "${{ matrix.script }}" 2>&1 | tee "e2e-logs/${{ matrix.backend }}.log"
+          python -u "${{ matrix.script }}" 2>&1 | tee "e2e-logs/${{ matrix.backend }}.log"
           code=${PIPESTATUS[0]}
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           if [ "$code" -eq 0 ]; then

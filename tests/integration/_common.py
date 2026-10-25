@@ -257,20 +257,26 @@ class Suite:
             self.checks.append(check)
             print(f"  {check}")
             print()
+            # Persist after every check: a script killed by CI's hard cap
+            # still leaves a (partial) report behind.
+            self._write_summary(version, total)
 
+        summary = self._write_summary(version, total)
+        print("=" * 70)
+        line = f"  Results: {summary['passed']}/{total} passed"
+        if summary["skipped"]:
+            line += f", {summary['skipped']} skipped (portal-side)"
+        if summary["failed"]:
+            line += f", {summary['failed']} FAILED"
+        print(f"{line}  ({summary['elapsed']:.1f}s total)")
+        print("=" * 70)
+        return summary["failed"] == 0
+
+    def _write_summary(self, version: str, total: int) -> dict[str, Any]:
         passed = sum(1 for c in self.checks if c.passed and not c.skipped)
         skipped = sum(1 for c in self.checks if c.skipped)
-        failed = total - passed - skipped
+        failed = len(self.checks) - passed - skipped
         elapsed = sum(c.elapsed for c in self.checks)
-        print("=" * 70)
-        line = f"  Results: {passed}/{total} passed"
-        if skipped:
-            line += f", {skipped} skipped (portal-side)"
-        if failed:
-            line += f", {failed} FAILED"
-        print(f"{line}  ({elapsed:.1f}s total)")
-        print("=" * 70)
-
         summary = {
             "backend": self.backend,
             "title": self.title,
@@ -282,6 +288,7 @@ class Suite:
             "skipped": skipped,
             "failed": failed,
             "total": total,
+            "complete": len(self.checks) == total,
             "elapsed": round(elapsed, 1),
             "checks": [c.to_dict() for c in self.checks],
         }
@@ -290,7 +297,7 @@ class Suite:
         if target:
             Path(target).parent.mkdir(parents=True, exist_ok=True)
             Path(target).write_text(json.dumps(summary, indent=2, ensure_ascii=False))
-        return failed == 0
+        return summary
 
     def main(self) -> None:
         ok = asyncio.run(self.run())
