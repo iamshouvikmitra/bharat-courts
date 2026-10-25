@@ -407,3 +407,28 @@ async def test_client_cache_failure_falls_back_to_glob(tmp_path: Path):
         paths = await client._sci_paths_for_cache(year=2020)
     assert paths is None
     await client.close()
+
+
+# ===========================================================================
+# 5. No progress bar on stdout (DuckDB 2.0 regression)
+# ===========================================================================
+
+
+def test_query_connection_never_prints_a_progress_bar(capfd):
+    """``--json`` consumers parse stdout; DuckDB's bar must never land there.
+
+    DuckDB 2.0 kept printing the bar after ``PRAGMA disable_progress_bar``
+    unless ``enable_progress_bar_print`` was also off. Force the bar to kick
+    in immediately and run a query long enough to trigger it; the C++ side
+    writes straight to fd 1, hence ``capfd`` rather than ``capsys``.
+    """
+    q = _ArchiveQuery()
+    try:
+        con = q._connect()
+        con.execute("SET progress_bar_time = 1;")
+        (n,) = con.execute("SELECT count(*) FROM range(300000000)").fetchone()
+    finally:
+        q.close()
+    out, _err = capfd.readouterr()
+    assert n == 300_000_000
+    assert out == "", f"progress bar leaked to stdout: {out[:80]!r}"

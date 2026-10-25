@@ -153,7 +153,7 @@ status, hearings, in-progress orders).
 
 **Modules**:
 - `client.py` — `ArchiveClient` async facade: `search`, `iter_judgments` (LIMIT/OFFSET streaming with stable sort), `fetch_pdf` (routes SCI vs HC), `count`, `cache_info`.
-- `metadata.py` — `_ArchiveQuery` runs DuckDB SQL against the parquet glob (or local paths from the cache). Anonymous S3 via `CREATE SECRET (TYPE S3, KEY_ID '', SECRET '')`. Always disable the progress bar (`PRAGMA disable_progress_bar`) — it pollutes non-TTY output.
+- `metadata.py` — `_ArchiveQuery` runs DuckDB SQL against the parquet glob (or local paths from the cache). Anonymous S3 via `CREATE SECRET (TYPE S3, KEY_ID '', SECRET '')`. Always disable the progress bar — it is written to **stdout** and corrupts `--json` output. Since DuckDB 2.0 `PRAGMA disable_progress_bar` alone is not enough: `SET enable_progress_bar_print = false` is what actually stops the printing (caught live by the CLI monitor; regression test in `tests/test_archive_quickwins.py`).
 - `metadata_cache.py` — `_MetadataCache` mirrors parquet shards under `~/.cache/bharat-courts/archive/metadata/` with mtime TTL (default 30 days). HC needs per-year LIST to discover bench parquets; listings are JSON-cached. Used only when partition is fully resolved (year + court for HC; year for SCI).
 - `storage.py` — `_PdfStorage` for the PDF cache. HC = direct GET per file (~250 KB). SCI = per-year tar (~40–500 MB) downloaded once, random-access via `tarfile`. LRU eviction with 5 GiB default cap (`BHARAT_COURTS_ARCHIVE_CACHE_MAX_GB`).
 - `schema.py` — `row_to_judgment` maps both bucket schemas to the unified `Judgment` dataclass.

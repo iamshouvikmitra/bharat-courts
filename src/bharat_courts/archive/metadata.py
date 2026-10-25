@@ -57,10 +57,18 @@ class _ArchiveQuery:
             con.execute(
                 f"CREATE OR REPLACE SECRET (TYPE S3, REGION '{REGION}', KEY_ID '', SECRET '');"
             )
-            # The default TTY progress bar swamps non-interactive output and
-            # is hostile to JSON/log piping. Users wanting a progress bar can
-            # re-enable it via PRAGMA on the returned connection.
+            # The default progress bar swamps non-interactive output and is
+            # hostile to JSON/log piping (it writes to stdout, not stderr).
+            # DuckDB < 2.0 honoured ``disable_progress_bar`` alone; since 2.0
+            # the bar is still *printed* unless ``enable_progress_bar_print``
+            # is also off — the live CLI check caught `--json archive count`
+            # emitting a bar before the JSON. Set both; the second is wrapped
+            # for builds that don't know the setting.
             con.execute("PRAGMA disable_progress_bar;")
+            try:
+                con.execute("SET enable_progress_bar_print = false;")
+            except Exception:  # noqa: BLE001 — unknown setting on an old build
+                pass
             self._con = con
         return self._con
 
