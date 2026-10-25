@@ -54,6 +54,7 @@ PROBE_URL = "https://hcservices.ecourts.gov.in/hcservices/main.php"
 PROBE_TIMEOUT = 15  # seconds per proxy
 LIST_TIMEOUT = 20
 MAX_WORKERS = 24
+RECHECK_TOP = 8  # fastest responders re-verified sequentially before one is chosen
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -128,8 +129,18 @@ def main() -> int:
         log("no working Indian proxy found")
         return 0
     working.sort(key=lambda r: r[1])
-    log(f"{len(working)}/{len(candidates)} working; picking fastest")
-    print(working[0][0])
+    log(f"{len(working)}/{len(candidates)} answered once; re-verifying the fastest")
+    # Free proxies die within minutes. Require a second, sequential success a
+    # moment later before trusting one with a 10-minute run.
+    for proxy_url, first_t in working[:RECHECK_TOP]:
+        time.sleep(1)
+        again = probe(proxy_url.removeprefix("http://"))
+        if again:
+            log(f"picked {proxy_url} ({first_t:.1f}s, {again[1]:.1f}s)")
+            print(proxy_url)
+            return 0
+        log(f"  dropped {proxy_url}: failed re-check")
+    log("every candidate failed its re-check")
     return 0
 
 
