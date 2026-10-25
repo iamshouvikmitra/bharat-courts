@@ -17,6 +17,14 @@ class BharatCourtsConfig(BaseSettings):
     timeout: int = 60
     max_retries: int = 3
     log_level: str = "INFO"
+    # Optional HTTP(S) proxy for the live portal clients, e.g.
+    # "http://user:pass@in.proxy.example:8000". The eCourts portals are only
+    # reliably reachable from Indian IPs, so CI runners and overseas users
+    # route through an Indian egress. Unset (the default) means "use the
+    # process environment": httpx still honours HTTP_PROXY / HTTPS_PROXY /
+    # NO_PROXY. Setting this applies to the portal clients only — the archive
+    # talks to S3 directly and never needs it.
+    proxy: str | None = None
 
     model_config = {"env_prefix": "BHARAT_COURTS_", "env_file": ".env", "extra": "ignore"}
 

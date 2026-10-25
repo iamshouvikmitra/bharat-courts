@@ -50,6 +50,9 @@ class RateLimitedClient:
             verify: bool | ssl.SSLContext = self._ssl_context if self._ssl_context else False
             self._client = httpx.AsyncClient(
                 timeout=self._config.timeout,
+                # ``None`` keeps httpx's default: honour HTTP(S)_PROXY / NO_PROXY
+                # from the environment. An explicit setting wins over them.
+                proxy=self._config.proxy or None,
                 headers={
                     "User-Agent": self._config.user_agent,
                     "Accept": "application/json, text/javascript, */*; q=0.01",

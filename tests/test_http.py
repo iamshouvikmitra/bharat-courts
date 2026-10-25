@@ -177,3 +177,24 @@ async def test_context_manager(fast_config):
     async with client:
         assert client._client is not None
     assert client._client is None
+
+
+def test_proxy_setting_is_applied_to_httpx(monkeypatch):
+    """``BHARAT_COURTS_PROXY`` routes the portal clients through a proxy."""
+    # Env proxies would otherwise leak into the "no proxy" half of the check.
+    for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(var, raising=False)
+
+    direct = RateLimitedClient(BharatCourtsConfig(proxy=None))._ensure_client()
+    assert direct._mounts == {}
+
+    proxied = RateLimitedClient(BharatCourtsConfig(proxy="http://user:pw@127.0.0.1:3128"))
+    client = proxied._ensure_client()
+    # httpx expresses a proxy as a transport mounted on the all:// pattern.
+    assert client._mounts, "proxy setting did not reach httpx"
+    assert all(t is not None for t in client._mounts.values())
+
+
+def test_proxy_setting_reads_env(monkeypatch):
+    monkeypatch.setenv("BHARAT_COURTS_PROXY", "http://10.0.0.1:8080")
+    assert BharatCourtsConfig().proxy == "http://10.0.0.1:8080"

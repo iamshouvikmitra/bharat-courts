@@ -27,6 +27,7 @@ the upper-cased field name.
 | `timeout` | `BHARAT_COURTS_TIMEOUT` | `60` | HTTP request timeout, in seconds. Wide District Court party-name searches genuinely take 30–60s on the portal, so the default is deliberately generous. |
 | `max_retries` | `BHARAT_COURTS_MAX_RETRIES` | `3` | How many times a failed HTTP request is retried before giving up. |
 | `log_level` | `BHARAT_COURTS_LOG_LEVEL` | `"INFO"` | Logging verbosity (`"DEBUG"`, `"INFO"`, `"WARNING"`, `"ERROR"`). Routing decisions in the `Judgments` facade are logged at `INFO`. |
+| `proxy` | `BHARAT_COURTS_PROXY` | unset | An HTTP(S) proxy URL (`http://user:pass@host:port`) for the live portal clients. The eCourts portals are only reliably reachable from Indian IP addresses — from a cloud runner or from abroad, connections simply time out — so point this at an Indian egress (a proxy provider with `country=IN` targeting, or a small proxy on an Indian VPS). Unset keeps httpx's default: `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` from the environment are honoured. The archive client talks to S3 directly and ignores this setting. |
 
 !!! note "These settings drive the live portal clients"
     `request_delay`, `timeout`, and `max_retries` apply to the rate-limited

@@ -1496,6 +1496,7 @@ Environment variables with `BHARAT_COURTS_` prefix:
 | `BHARAT_COURTS_TIMEOUT` | `60` | Request timeout (seconds). Wide District Courts party-name searches genuinely take 30-60s on the portal — the previous default of 30 was too tight and triggered timeouts against endpoints that were about to respond. |
 | `BHARAT_COURTS_MAX_RETRIES` | `3` | Retry count on failure (only applied to 5xx and connect/read timeouts; 4xx responses propagate immediately). |
 | `BHARAT_COURTS_LOG_LEVEL` | `INFO` | Logging level |
+| `BHARAT_COURTS_PROXY` | unset | HTTP(S) proxy for the live portal clients, e.g. `http://user:pass@host:port`. The eCourts portals are only reliably reachable from Indian IPs, so set this (or `HTTPS_PROXY`) when running from CI or abroad. Not applied to the archive (S3). |
 
 Or use a `.env` file. See [.env.example](.env.example).
 
@@ -1579,9 +1580,10 @@ pytest tests/test_hcservices_parser.py::test_parse_case_status_json
 pytest -v
 
 # Live integration tests against real eCourts portals (requires ddddocr + network)
-python tests/integration/hcservices.py    # live HC Services + CAPTCHA solver
+python tests/integration/hcservices.py    # live HC Services + CAPTCHA solver (rotating courts)
 python tests/integration/archive.py       # archive + facade against real S3
-# see tests/integration/README.md for the full list
+python tests/integration/cli.py           # the CLI, every command group
+# see tests/integration/README.md for the full list and the coverage map
 ```
 
 ### Code style
