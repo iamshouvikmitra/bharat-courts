@@ -137,10 +137,12 @@ jobs:
           sleep 3
           echo "EGRESS_MODE=tailscale:$TS_EXIT_NODE" >> "$GITHUB_ENV"
 
-      # Options 1 and 3: an HTTP(S) proxy, exported for httpx (trust_env) —
-      # BHARAT_COURTS_PROXY is what the SDK reads; HTTPS_PROXY covers the raw
-      # httpx client the OCR check uses. S3, GitHub and PyPI stay direct.
+      # Options 1 and 3: an HTTP(S) proxy. It is handed to the *run step only*
+      # (as a step output, not GITHUB_ENV): a job-wide HTTPS_PROXY also drags
+      # the artifact upload to Azure blob storage through a flaky free proxy,
+      # which is exactly what failed the first dispatch of this workflow.
       - name: Resolve Indian proxy
+        id: egress
         if: matrix.india_egress && env.TS_OAUTH_CLIENT_ID == ''
         run: |
           proxy=""
@@ -152,15 +154,8 @@ jobs:
             proxy="$(python .github/scripts/find_india_proxy.py)" || proxy=""
             if [ -n "$proxy" ]; then mode="free:$proxy"; else mode="direct (no free proxy answered)"; fi
           fi
-          if [ -n "$proxy" ]; then
-            echo "::add-mask::$proxy"
-            {
-              echo "BHARAT_COURTS_PROXY=$proxy"
-              echo "HTTPS_PROXY=$proxy"
-              echo "HTTP_PROXY=$proxy"
-              echo "NO_PROXY=amazonaws.com,github.com,githubusercontent.com,pypi.org,huggingface.co,localhost,127.0.0.1"
-            } >> "$GITHUB_ENV"
-          fi
+          [ -n "$proxy" ] && echo "::add-mask::$proxy"
+          echo "proxy=$proxy" >> "$GITHUB_OUTPUT"
           echo "EGRESS_MODE=$mode" >> "$GITHUB_ENV"
           echo "egress: $mode"
 
@@ -173,6 +168,13 @@ jobs:
         timeout-minutes: ${{ matrix.run_timeout }} # HARD per-script cap
         env:
           E2E_SUMMARY_JSON: e2e-logs/${{ matrix.backend }}.json
+          # BHARAT_COURTS_PROXY is what the SDK reads; HTTPS_PROXY covers the
+          # raw httpx client the OCR check uses. Empty when no proxy resolved.
+          # S3, GitHub, PyPI and Hugging Face stay direct.
+          BHARAT_COURTS_PROXY: ${{ steps.egress.outputs.proxy }}
+          HTTPS_PROXY: ${{ steps.egress.outputs.proxy }}
+          HTTP_PROXY: ${{ steps.egress.outputs.proxy }}
+          NO_PROXY: amazonaws.com,github.com,githubusercontent.com,pypi.org,huggingface.co,localhost,127.0.0.1
         run: |
           set +e
           mkdir -p e2e-logs
