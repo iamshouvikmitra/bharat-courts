@@ -51,7 +51,13 @@ SOURCES = [
 # Probe against the portal the SDK actually needs, through an HTTPS CONNECT
 # tunnel — a proxy that only forwards plain HTTP is useless to us.
 PROBE_URL = "https://hcservices.ecourts.gov.in/hcservices/main.php"
+# The page's <title> is "Home - eCourt India High Courts Services". A proxy that
+# answers 200 with its own landing/block page must not count as working.
+PROBE_MARKER = b"ecourt"
 PROBE_TIMEOUT = 15  # seconds per proxy
+# A proxy slower than this per request turns a 1-minute suite into a 10-minute
+# one and trips the CI caps; prefer anything under it, fall back to the rest.
+FAST_ENOUGH = 8.0
 LIST_TIMEOUT = 20
 MAX_WORKERS = 24
 RECHECK_TOP = 8  # fastest responders re-verified sequentially before one is chosen
@@ -106,7 +112,8 @@ def probe(hostport: str) -> tuple[str, float] | None:
     t0 = time.time()
     try:
         with opener.open(req, timeout=PROBE_TIMEOUT) as resp:
-            if resp.status == 200 and len(resp.read(4096)) > 0:
+            body = resp.read(65536)
+            if resp.status == 200 and PROBE_MARKER in body.lower():
                 return proxy_url, time.time() - t0
     except Exception:  # noqa: BLE001 — dead proxy
         return None
@@ -129,7 +136,11 @@ def main() -> int:
         log("no working Indian proxy found")
         return 0
     working.sort(key=lambda r: r[1])
-    log(f"{len(working)}/{len(candidates)} answered once; re-verifying the fastest")
+    fast = [w for w in working if w[1] <= FAST_ENOUGH]
+    log(
+        f"{len(working)}/{len(candidates)} answered once ({len(fast)} under {FAST_ENOUGH:.0f}s); "
+        "re-verifying the fastest"
+    )
     # Free proxies die within minutes. Require a second, sequential success a
     # moment later before trusting one with a 10-minute run.
     for proxy_url, first_t in working[:RECHECK_TOP]:
