@@ -1,19 +1,40 @@
 name: Live E2E monitor
 
 # Dogfoods bharat-courts against the real eCourts portals + AWS Open Data
-# buckets on a schedule. If a backend breaks (portal changes shape, PDF path
-# moves, S3 schema drifts, CAPTCHA solver regresses), the job opens — or
-# updates — a GitHub issue for that backend, and auto-closes it once the
-# backend is healthy again. This is the public signal that the SDK actually
-# works against live data, not just against fixtures.
+# buckets on a schedule. One job per backend runs the matching script under
+# tests/integration/, which prints PASS / FAIL / SKIP per check and writes a
+# JSON summary. If a backend breaks (portal changes shape, PDF path moves, S3
+# schema drifts, CAPTCHA solver regresses), the job opens — or updates — a
+# GitHub issue for that backend, and auto-closes it once healthy again.
+#
+# SKIP means the *portal's own* backend answered with an outage page
+# ("Connection to server failed", "Unable to connect to server"): the SDK
+# cannot be judged, so the check neither passes nor fails the backend.
+#
+# Egress: since 2026-10-22 every eCourts host times out at TCP connect from
+# GitHub's runner IPs while answering fine from India (S3 is unaffected). The
+# live jobs therefore route through an Indian egress, resolved in this order:
+#   1. secrets.E2E_PROXY_URL  — a paid / self-hosted HTTP(S) proxy in India
+#      (http://user:pass@host:port). Stable; recommended.
+#   2. Tailscale exit node    — secrets.TS_OAUTH_CLIENT_ID + TS_OAUTH_SECRET
+#      + TS_EXIT_NODE (an Indian VPS advertising itself as an exit node).
+#   3. Free public proxy      — .github/scripts/find_india_proxy.py probes the
+#      public lists against the real portal and picks the fastest responder.
+#      Unreliable (2/68 worked one day, 27/73 the next) but costs nothing.
+#      Disable with repository variable E2E_FREE_PROXY_FALLBACK=false.
+#   4. Direct — will fail until the portals unblock GitHub's ranges.
+# The archive job never uses a proxy: S3 is reachable directly and a 40 MB
+# tar through a metered proxy is wasted money.
 
 on:
-  # Validated 2026-07-15 with manual workflow_dispatch runs: all four backends
-  # green from GitHub's runner IPs (not blocked by the eCourts portals), so the
-  # daily schedule is enabled below. Keep workflow_dispatch for on-demand runs.
   schedule:
     - cron: "30 1 * * *" # daily 01:30 UTC ≈ 07:00 IST
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "E2E_SEED — rotation seed to reproduce a specific day's court/phrase selection (blank = today)"
+        required: false
+        default: ""
 
 # Never cancel an in-flight monitor run; let each finish so issue state stays
 # consistent. Runs are ~daily so overlap is unlikely anyway.
@@ -29,30 +50,59 @@ jobs:
   e2e:
     name: ${{ matrix.backend }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # whole-job backstop (install + run + reporting)
+    timeout-minutes: 20 # whole-job backstop (install + egress + run + reporting)
     strategy:
       fail-fast: false # one flaky portal must not mask the others
       matrix:
         include:
           # run_timeout is a HARD per-script cap (minutes) so a hung portal can
-          # never burn Actions minutes. Sized ~10x the local benchmark to leave
-          # slack for slower CI runners; the job-level timeout is the backstop.
+          # never burn Actions minutes. india_egress marks jobs that hit the
+          # eCourts portals and therefore need the Indian proxy.
           - backend: archive
             script: tests/integration/archive.py
-            hits: AWS Open Data S3 (SCI + 25 HCs)
+            hits: AWS Open Data S3 (SCI + 25 HCs) + Judgments facade
             run_timeout: 8
+            india_egress: false
           - backend: hcservices
             script: tests/integration/hcservices.py
-            hits: hcservices.ecourts.gov.in (CAPTCHA-gated)
-            run_timeout: 8
+            hits: hcservices.ecourts.gov.in (CAPTCHA-gated, rotating High Courts)
+            run_timeout: 10
+            india_egress: true
           - backend: districtcourts
             script: tests/integration/districtcourts.py
-            hits: services.ecourts.gov.in (CAPTCHA-gated)
+            hits: services.ecourts.gov.in (CAPTCHA-gated, rotating states)
+            run_timeout: 10
+            india_egress: true
+          - backend: judgments
+            script: tests/integration/judgments.py
+            hits: judgments.ecourts.gov.in (CAPTCHA-gated) + Judgments facade (live route)
             run_timeout: 8
+            india_egress: true
           - backend: calcuttahc
-            script: tests/integration/calcuttahc_wpa_12886.py
-            hits: calcuttahighcourt.gov.in + judgments.ecourts.gov.in
+            script: tests/integration/calcuttahc.py
+            hits: calcuttahighcourt.gov.in + hcservices.ecourts.gov.in
             run_timeout: 8
+            india_egress: true
+          - backend: sci
+            script: tests/integration/sci.py
+            hits: www.sci.gov.in (homepage feed + PDF)
+            run_timeout: 5
+            india_egress: true
+          - backend: cli
+            script: tests/integration/cli.py
+            hits: bharat-courts CLI across every command group (S3 + portals)
+            run_timeout: 10
+            india_egress: true
+
+    env:
+      E2E_SEED: ${{ github.event.inputs.seed }}
+      # Mapped here so the steps below can test them with `env.X != ''`
+      # (secrets cannot be used in `if:` directly).
+      E2E_PROXY_URL: ${{ secrets.E2E_PROXY_URL }}
+      TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+      TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+      TS_EXIT_NODE: ${{ secrets.TS_EXIT_NODE }}
+      E2E_FREE_PROXY_FALLBACK: ${{ vars.E2E_FREE_PROXY_FALLBACK }}
 
     steps:
       - uses: actions/checkout@v4
@@ -70,13 +120,59 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[all]"
 
-      # Run the backend's live integration script. It prints PASS/FAIL per
-      # check and exits non-zero on any failure. We capture the exit code and
-      # the full log WITHOUT failing the step, so the reporting step below can
-      # always run and manage the issue.
+      # --- Indian egress -------------------------------------------------
+      # Option 2: Tailscale exit node (only when the three TS_* secrets exist).
+      - name: Tailscale (exit node in India)
+        if: matrix.india_egress && env.E2E_PROXY_URL == '' && env.TS_OAUTH_CLIENT_ID != ''
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Route through the exit node
+        if: matrix.india_egress && env.E2E_PROXY_URL == '' && env.TS_OAUTH_CLIENT_ID != ''
+        run: |
+          sudo tailscale set --exit-node="$TS_EXIT_NODE" --exit-node-allow-lan-access=true
+          sleep 3
+          echo "EGRESS_MODE=tailscale:$TS_EXIT_NODE" >> "$GITHUB_ENV"
+
+      # Options 1 and 3: an HTTP(S) proxy, exported for httpx (trust_env) —
+      # BHARAT_COURTS_PROXY is what the SDK reads; HTTPS_PROXY covers the raw
+      # httpx client the OCR check uses. S3, GitHub and PyPI stay direct.
+      - name: Resolve Indian proxy
+        if: matrix.india_egress && env.TS_OAUTH_CLIENT_ID == ''
+        run: |
+          proxy=""
+          mode="direct"
+          if [ -n "$E2E_PROXY_URL" ]; then
+            proxy="$E2E_PROXY_URL"
+            mode="configured"
+          elif [ "${E2E_FREE_PROXY_FALLBACK:-true}" != "false" ]; then
+            proxy="$(python .github/scripts/find_india_proxy.py)" || proxy=""
+            if [ -n "$proxy" ]; then mode="free:$proxy"; else mode="direct (no free proxy answered)"; fi
+          fi
+          if [ -n "$proxy" ]; then
+            echo "::add-mask::$proxy"
+            {
+              echo "BHARAT_COURTS_PROXY=$proxy"
+              echo "HTTPS_PROXY=$proxy"
+              echo "HTTP_PROXY=$proxy"
+              echo "NO_PROXY=amazonaws.com,github.com,githubusercontent.com,pypi.org,huggingface.co,localhost,127.0.0.1"
+            } >> "$GITHUB_ENV"
+          fi
+          echo "EGRESS_MODE=$mode" >> "$GITHUB_ENV"
+          echo "egress: $mode"
+
+      # --- Run -----------------------------------------------------------
+      # The script prints PASS/FAIL/SKIP per check, writes e2e-logs/<backend>.json
+      # and exits non-zero on any FAIL. We capture the exit code and the full
+      # log WITHOUT failing the step, so the reporting steps always run.
       - name: Run live E2E — ${{ matrix.backend }}
         id: run
         timeout-minutes: ${{ matrix.run_timeout }} # HARD per-script cap
+        env:
+          E2E_SUMMARY_JSON: e2e-logs/${{ matrix.backend }}.json
         run: |
           set +e
           mkdir -p e2e-logs
@@ -90,12 +186,30 @@ jobs:
           fi
           exit 0
 
-      - name: Upload log
+      # --- Report --------------------------------------------------------
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## ${{ matrix.backend }} — ${{ steps.run.outputs.outcome || 'fail (no outcome: install/timeout)' }}"
+            echo ""
+            echo "Hits: ${{ matrix.hits }}  "
+            echo "Egress: \`${EGRESS_MODE:-direct}\`"
+            echo ""
+            python .github/scripts/render_e2e_summary.py "e2e-logs/${{ matrix.backend }}.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+          python .github/scripts/render_e2e_summary.py "e2e-logs/${{ matrix.backend }}.json" --title \
+            > "e2e-logs/${{ matrix.backend }}.md" || true
+
+      - name: Upload log + summary
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-log-${{ matrix.backend }}
-          path: e2e-logs/${{ matrix.backend }}.log
+          name: e2e-${{ matrix.backend }}
+          path: |
+            e2e-logs/${{ matrix.backend }}.log
+            e2e-logs/${{ matrix.backend }}.json
+            e2e-logs/${{ matrix.backend }}.md
           if-no-files-found: ignore
           retention-days: 14
 
@@ -117,22 +231,39 @@ jobs:
             const fs = require('fs');
             const backend = process.env.BACKEND;
             const hits = process.env.HITS;
-            const outcome = process.env.OUTCOME || 'fail'; // no outcome ⇒ setup/install broke ⇒ failure
+            const outcome = process.env.OUTCOME || 'fail'; // no outcome ⇒ setup/install broke or the script hung
             const runUrl = process.env.RUN_URL;
+            const egress = process.env.EGRESS_MODE || 'direct';
             const failed = outcome !== 'pass';
 
             const FAIL_LABEL = 'live-e2e-failure';
             const BACKEND_LABEL = `backend:${backend}`;
             const title = `🔴 Live E2E failing: ${backend}`;
 
-            // Log tail (last ~80 lines, capped) for the issue body/comment.
+            // Per-check table rendered from the JSON summary (falls back to a note).
+            let table = '';
+            try { table = fs.readFileSync(`e2e-logs/${backend}.md`, 'utf8'); } catch (_) {}
+            if (!table.trim()) table = '_No per-check summary — the script did not get far enough to write one._\n';
+
+            // Log tail (last ~60 lines, capped) for the raw view.
             let tail = '(no log captured)';
             try {
               const raw = fs.readFileSync(`e2e-logs/${backend}.log`, 'utf8');
-              tail = raw.split('\n').slice(-80).join('\n').slice(-5500) || tail;
+              tail = raw.split('\n').slice(-60).join('\n').slice(-4500) || tail;
             } catch (_) {}
 
             const now = new Date().toISOString();
+            const noEgress = /ConnectTimeout|All connection attempts failed|timed out/.test(tail) && egress.startsWith('direct');
+            const egressNote = noEgress
+              ? `\n> ⚠️ Egress was \`${egress}\` and the log shows connect timeouts: GitHub's runner IPs cannot reach the eCourts portals. ` +
+                `Configure \`E2E_PROXY_URL\` (or a Tailscale exit node) — see tests/integration/README.md. This is not an SDK fault.\n`
+              : '';
+
+            const report =
+              `**Egress:** \`${egress}\`${egressNote}\n` +
+              table +
+              `\n<details><summary>Log tail (run: ${runUrl})</summary>\n\n` +
+              '```\n' + tail + '\n```\n</details>';
 
             // Find an existing open tracking issue for this backend.
             const existing = await github.paginate(github.rest.issues.listForRepo, {
@@ -144,28 +275,23 @@ jobs:
             });
             const issue = existing[0];
 
-            const detailsBlock =
-              `<details><summary>Log tail (run: ${runUrl})</summary>\n\n` +
-              '```\n' + tail + '\n```\n</details>';
-
             if (failed) {
               const bodyHeader =
                 `**Backend:** \`${backend}\` — ${hits}\n` +
                 `**Detected:** ${now}\n` +
-                `**Exit code:** ${process.env.EXIT_CODE || 'n/a'}\n\n` +
-                `The scheduled live end-to-end check for the \`${backend}\` backend failed. ` +
-                `This means the SDK could not complete a real query against the live source. ` +
-                `Likely causes: the portal changed its HTML/JSON shape, a PDF path moved, ` +
-                `the S3 schema drifted, the CAPTCHA solver regressed, or the source is ` +
-                `temporarily down / blocking CI IPs.\n\n` +
-                `_Auto-filed by the Live E2E monitor. It will auto-close when \`${backend}\` passes again._`;
+                `**Exit code:** ${process.env.EXIT_CODE || 'n/a (timed out or crashed before exit)'}\n\n` +
+                `The scheduled live end-to-end check for the \`${backend}\` backend failed: at least one check ` +
+                `could not complete a real query against the live source (checks marked ⏭️ are portal-side ` +
+                `outages and do not count). Likely causes: the portal changed its HTML/JSON shape, a PDF path moved, ` +
+                `the S3 schema drifted, the CAPTCHA solver regressed, or the source is blocking the runner's egress.\n\n` +
+                `_Auto-filed by the Live E2E monitor. It will auto-close when \`${backend}\` passes again._\n\n`;
 
               if (issue) {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issue.number,
-                  body: `🔴 Still failing as of ${now}.\n\n${detailsBlock}`,
+                  body: `🔴 Still failing as of ${now}.\n\n${report}`,
                 });
                 core.info(`Updated existing issue #${issue.number} for ${backend}`);
               } else {
@@ -174,7 +300,7 @@ jobs:
                   repo: context.repo.repo,
                   title,
                   labels: [FAIL_LABEL, BACKEND_LABEL],
-                  body: `${bodyHeader}\n\n${detailsBlock}`,
+                  body: bodyHeader + report,
                 });
                 core.info(`Opened issue #${created.data.number} for ${backend}`);
               }
@@ -184,7 +310,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issue.number,
-                body: `✅ \`${backend}\` live E2E passed again as of ${now} — auto-closing.\n\nRun: ${runUrl}`,
+                body: `✅ \`${backend}\` live E2E passed again as of ${now} — auto-closing.\n\n${report}`,
               });
               await github.rest.issues.update({
                 owner: context.repo.owner,
@@ -205,6 +331,6 @@ jobs:
         if: always()
         run: |
           if [ "${{ steps.run.outputs.outcome }}" != "pass" ]; then
-            echo "::error::${{ matrix.backend }} live E2E failed (exit ${{ steps.run.outputs.exit_code }})"
+            echo "::error::${{ matrix.backend }} live E2E failed (exit ${{ steps.run.outputs.exit_code }}; egress ${EGRESS_MODE:-direct})"
             exit 1
           fi

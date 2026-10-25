@@ -34,10 +34,14 @@ ruff format .
 
 # Live integration tests — standalone scripts under tests/integration/.
 # Not collected by pytest; invoke directly. See tests/integration/README.md.
-python tests/integration/hcservices.py    # HC Services portal + CAPTCHA
-python tests/integration/archive.py       # archive + facade vs real S3
+python tests/integration/hcservices.py    # HC Services portal + CAPTCHA (rotating HCs)
 python tests/integration/districtcourts.py
-python tests/integration/calcuttahc_wpa_12886.py
+python tests/integration/judgments.py     # judgments portal + facade live route
+python tests/integration/calcuttahc.py
+python tests/integration/sci.py
+python tests/integration/archive.py       # archive + facade vs real S3
+python tests/integration/cli.py           # the CLI, every command group
+E2E_SEED=739914 python tests/integration/hcservices.py   # reproduce a day's rotation
 ```
 
 ## Architecture
@@ -46,7 +50,7 @@ python tests/integration/calcuttahc_wpa_12886.py
 
 - **`models.py`** — All data models. Dataclasses with `_Serializable` mixin providing `to_dict()` and `to_json()`. Key types: `Court`, `CaseInfo`, `CaseOrder`, `CauseListPDF`, `JudgmentResult`, `Judgment`, `SearchResult`. `Judgment` is the unified type used by the archive; `JudgmentResult` is the older type used by `JudgmentSearchClient`.
 - **`courts.py`** — Static registry of all courts with eCourts state codes. `get_court("delhi")` returns a `Court` object. Also: `get_court_by_state_code("26")` (used by the archive to resolve HC partitions), `infer_court_from_cnr("DLHC...")` (4-letter prefix → Court, covers all 25 HCs + SCI). Codes verified against live portal.
-- **`config.py`** — Pydantic Settings with `BHARAT_COURTS_` env prefix. Loaded once as module-level `config` singleton.
+- **`config.py`** — Pydantic Settings with `BHARAT_COURTS_` env prefix. Loaded once as module-level `config` singleton. `proxy` (`BHARAT_COURTS_PROXY`) routes the portal clients through an HTTP(S) proxy — the eCourts portals are only reliably reachable from Indian IPs; unset means httpx's env-var behaviour (`HTTPS_PROXY` etc.) applies. The archive's plain httpx clients ignore it on purpose.
 - **`http.py`** — `RateLimitedClient` wrapping httpx with retry, rate limiting, SSL bypass, and browser-like headers. Used by the live clients; the archive uses plain `httpx.AsyncClient` (no rate limiting needed for S3).
 - **`captcha/`** — Pluggable CAPTCHA solving. `CaptchaSolver` ABC → `ManualCaptchaSolver` (stdin), `OCRCaptchaSolver` (ddddocr), `ONNXCaptchaSolver`. Only the live clients use these — the archive is CAPTCHA-free.
 - **`hcservices/`** — Primary live client for hcservices.ecourts.gov.in (fully working).
@@ -209,7 +213,8 @@ Delhi=26, Bombay=1, Allahabad=13, Calcutta=16, Gauhati=6, Telangana=29, AP=2, Ka
 ## Testing
 
 - **Unit tests** (`tests/`) — 250 tests, all offline. Parser tests use HTML/JSON fixtures in `tests/fixtures/`. Archive tests use synthetic in-memory tars + `respx`-mocked HTTP. Facade tests use `AsyncMock` to stub the backends so we exercise the routing decision matrix without touching either S3 or the live portal.
-- **Live integration tests** (`tests/integration/`) — standalone scripts (not pytest-collected; default `python_files=test_*.py` doesn't match these). One per backend: `hcservices.py`, `districtcourts.py`, `archive.py` (covers archive + facade), `calcuttahc_wpa_12886.py` (regression for a known-good case). Each prints PASS/FAIL and exits non-zero on failure — suitable for pre-release validation. See `tests/integration/README.md`.
+- **Live integration tests** (`tests/integration/`) — standalone scripts (not pytest-collected; default `python_files=test_*.py` doesn't match these). One per backend: `hcservices.py`, `districtcourts.py`, `judgments.py`, `calcuttahc.py`, `sci.py`, `archive.py` (archive + facade), `cli.py`. All share `_common.py` (`Suite` / `Check`, daily rotation seeded by date or `E2E_SEED`, `first_working` fall-through, JSON summary via `E2E_SUMMARY_JSON`). Checks **rotate over pools of courts / states / phrases and chain off live results** instead of pinning one case — Delhi HC stopped publishing cause lists on HC Services in Oct 2026 and a pinned check failed for days. Verdicts are PASS / FAIL / **SKIP** (the portal's own outage page: not an SDK fault, never fails the script). `tests/integration/README.md` has the coverage map; keep it current when adding a public method.
+- **Live E2E monitor** (`.github/workflows/live-e2e.yml`) — runs all seven scripts daily, renders each JSON summary into the job summary and the `live-e2e-failure` tracking issue (`.github/scripts/render_e2e_summary.py`). The eCourts portals time out from GitHub runner IPs (since 2026-10-22), so portal jobs resolve an Indian egress: `E2E_PROXY_URL` secret → Tailscale exit node (`TS_*` secrets) → free public proxy picked by `.github/scripts/find_india_proxy.py` (probes the lists against the real portal) → direct. The archive job stays direct (S3 is reachable; don't meter 40 MB tars through a proxy).
 - **Mocking** — `respx` for HTTP (works with httpx natively), custom `CaptchaSolver` subclass returning fixed strings for live-client tests, `AsyncMock` + `unittest.mock.patch.object` for the archive query/cache layer and the facade routing.
 - **respx caveat**: doesn't support `host__icontains` matchers — use `url__regex` instead.
 

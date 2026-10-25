@@ -84,13 +84,20 @@ portal-facing ones need a CAPTCHA solver (install the `[ocr]` extra, included in
 makes them useful for pre-release validation.
 
 ```bash
-python tests/integration/hcservices.py            # HC Services portal + CAPTCHA
-python tests/integration/archive.py               # archive + facade vs real S3
-python tests/integration/districtcourts.py        # District Courts portal
-python tests/integration/calcuttahc_wpa_12886.py  # Calcutta HC regression case
+python tests/integration/hcservices.py      # HC Services portal + CAPTCHA (rotating High Courts)
+python tests/integration/districtcourts.py  # District Courts portal (rotating states)
+python tests/integration/judgments.py       # judgments portal + the facade's live route
+python tests/integration/calcuttahc.py      # Calcutta HC website (+ a pinned regression case)
+python tests/integration/sci.py             # Supreme Court site feed + PDF
+python tests/integration/archive.py         # archive + facade vs real S3
+python tests/integration/cli.py             # the CLI, every command group
 ```
 
-See `tests/integration/README.md` for the full list and details.
+Courts, states and search phrases rotate daily; a check falls through to the
+next candidate when one has no data, and reports `SKIP` (not `FAIL`) when the
+portal's own backend is down. See `tests/integration/README.md` for the
+coverage map, the `E2E_SEED` knob to reproduce a day's rotation, and how the
+daily CI monitor reaches the portals from outside India.
 
 !!! warning "Integration tests touch live services"
     Because they scrape real portals, integration runs are slower, rate-limited,
